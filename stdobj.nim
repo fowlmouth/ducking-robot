@@ -188,6 +188,7 @@ proc createBlockContext (blck, caller:Object): Object =
   ctx.ip = bl.ipStart
   ctx.highIP = bl.ipEnd
   ctx.instrs = bl.meth
+  ctx.parent = bl.lexicalParent
   #blck.printComponents
 
 

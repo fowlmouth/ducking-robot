@@ -164,7 +164,7 @@ type
   Block* = object
     ipStart*, ipEnd*: int
     argNamesAt*, argNamesBytes*: int
-    meth*: Object
+    meth*, lexicalParent*: Object
 let cxBlock* = typeComponent(Block)
 
 type
@@ -260,9 +260,10 @@ macro defineMessage* (co,msg,body:untyped):stmt =
   # let src = repr(callsite())
   # echo src
   # echo treerepr cs
-  let src = newProc.repr
+  let src = new_proc.repr
   result = quote do:
-    let m = newPrimitiveMessage(`arg_names_node`, astToStr(`co`)&"#"&`msg`, "", `new_proc`)
+    let m = newPrimitiveMessage(
+      `arg_names_node`, astToStr(`co`)&"#"&`msg`, `src`, `new_proc`)
     rawDefine(`co_safe`, `msg`, m)
   when defined(Debug):
     echo repr result
@@ -601,9 +602,6 @@ proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
 
 
 
-proc createBlockContext* (): Object =
-  nil
-
 # defineMessage(cxCompiledMethod, "createContext") do:
 #   let cm = this.asPtr(CompiledMethod)
 #   if cm.contextCreator.isNil: return
@@ -866,10 +864,8 @@ proc tick* (self: Object) =
     bp.argNamesAt = idxForLocalNames
     bp.argNamesBytes = nBytesForLocalNames
     bp.meth = thisContext.instrs
+    bp.lexicalParent = activeContext
     push obj
-
-    echo " * bytecode_len = ", bytecode_len
-    echo " * end up at ", idx
 
     # var args = newSeq[string](nArgs)
     # idx += 1
@@ -1011,14 +1007,15 @@ proc send* (recv:Object; msg:string; args:varargs[Object]): Object =
       slots[i] = args[i]
 
   # instantiate and execute a vm
-  var ticks = 0
+  #var ticks = 0
   let o = executorForContext(ctx)
+  ctx.dataPtr(Context).exec = o
   let exe = o.dataPtr(Exec)
   while exe.isActive:
     o.tick
-    ticks += 1
+    #ticks += 1
   result = exe.result
-  wdd: echo "TICKS: ", ticks
+  #wdd: echo "TICKS: ", ticks
 
 
 
