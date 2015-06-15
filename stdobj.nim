@@ -146,6 +146,23 @@ proc execute* (expresion:string): Object =
 
 
 
+let
+  cxBlockDNU = slotsComponent("BlockForwarder")
+defineMessage(cxBlockDNU, "doesNotUnderstand:") do (msg):
+  ## here I have to create a new context to call dnu.msg OR "doesNotUnderstand:"
+  ## sending it to my parent context
+  ## 
+  ## at this point i realize i'm duplicating code from the Executor so i'll
+  ## make a new createMethodCallContextWithArgs() that can do most of the work
+  ## 
+  let dnu = msg.dataPtr(DNU)
+  let thisCtx = self.dataPtr(Context)
+  let parent = thisCtx.parent
+  if not parent.isNil:
+    let newContext = createMethodCallContext(
+      context, parent, dnu.msg, dnu.args)
+    thisCtx.exec.setActiveContext newContext
+
 
 proc createBlockContext (blck, caller:Object): Object =
   let bl = blck.dataPtr(Block)
@@ -180,7 +197,7 @@ proc createBlockContext (blck, caller:Object): Object =
 
   let cxLocals = slotsComponent("Locals", locals)
   result = instantiate aggregate(
-    cxLocals,
+    cxLocals, cxBlockDNU,
     cxStack, cxContext
   )
   let ctx = result.dataPtr(Context)
@@ -206,11 +223,16 @@ defineMessage(cxContext, "caller") do:
   result = this.asPtr(Context).caller
 
 defineMessage(cxContext, "return:to:") do (val,toContext):
-  let ctx = this.asPtr(Context)
+  let ctx = this.dataPtr(Context)
+  let toCtx = toContext.dataPtr(Context)
+  #may be needed:
+  # if toCtx.exec.isNil: toCtx.exec = ctx.exec
+  #TODO quadriple check this section of methods..
+  assert ctx.exec == toCtx.exec
   toContext.dataPtr(Stack).push val
   ctx.exec.setActiveContext(toContext)
 
-  
+
 
 defineMessage(cxExec, "tick") do:
   # let exe = this.asPtr(Exec)

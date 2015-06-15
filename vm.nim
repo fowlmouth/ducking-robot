@@ -69,14 +69,18 @@ type
 ##   contains three pieces needed to access an instance of a component:
 ##   the object that owns it, the component itself and the data offset in object.
 ##   BoundComponent is valid so long as you do not prepend the object type
-proc asPtr* (c:BoundComponent; t:typedesc): ptr t =
+proc dataPtr* (c:BoundComponent; t:typedesc): ptr t =
   # take unsafe reference to component data. 
   do_assert c.comp.nimType == data_type_id(t)
   let offs = c.self.ty.components[c.idx][0]
   cast[ptr t](c.self.dat[offs].addr)
-proc asVar* (c:BoundComponent; t:typedesc): var t =
+proc dataVar* (c:BoundComponent; t:typedesc): var t =
   c.asPtr(t)[]
 
+proc asPtr* (c:BoundComponent; t:typedesc): ptr t {.deprecated.} =
+  c.dataPtr(t)
+proc asVar* (c:BoundComponent; t:typedesc): var t {.deprecated.} =
+  c.dataVar(t)
 
 
 proc getComponent* (some: Object; comp: Component): BoundComponent {.inline.} =
@@ -276,10 +280,6 @@ macro defineMessage* (co,msg,body:untyped):stmt =
 
 
 proc send* (recv:Object; msg:string; args:varargs[Object]): Object 
-
-# not used in the vm
-defPrimitiveComponent(Int, int)
-defPrimitiveComponent(String, string)
 
 
 
@@ -565,7 +565,8 @@ proc pop* (some: ptr Stack): Object =
     else: seq[Object](some[]).pop
 proc push* (some: ptr Stack; val:Object) =
   if some.isNil: return
-  if seq[Object](some[]).isNil: newSeq seq[Object](some[]), 0
+  if seq[Object](some[]).isNil: 
+    newSeq seq[Object](some[]), 0
   seq[Object](some[]).add val
 
 proc top* (some: ptr Stack): Object =
@@ -599,6 +600,7 @@ proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
   result.dataVar(Context).highIP = cm.bytecode.high
   result.dataVar(Context).instrs = compiledMethod
   result.dataVar(BoundComponent) = bound
+
 
 
 
@@ -641,7 +643,8 @@ proc ptrToBytecode* (some: ptr Exec): ptr UncheckedArray[byte] =
 
 proc setActiveContext* (someExec, ctx: Object) =
   someExec.dataVar(Exec).activeContext = ctx
-  ctx.dataVar(Context).exec = someExec
+  if not ctx.isNIL:
+    ctx.dataVar(Context).exec = someExec
 
 let cxRawBytes* = typeComponent(cstring)
 let aggxRawBytes* = aggregate(cxRawBytes, cxObj)
@@ -657,6 +660,48 @@ template wdd * (body:stmt):stmt =
 
 const ShowInstruction = 
   defined(Debug) or defined(ShowInstruction)
+
+
+
+type DNU* = object
+  msg*: string
+  args*: seq[Object]
+  caller*: Object
+
+let 
+  cxDNU* = typeComponent(DNU)
+  aggxDNU* = aggregate(cxDNU, cxObj)
+cxDNU.aggr = aggxDNU
+
+proc newDNU* (msg:string, args:seq[Object], caller:Object): Object =
+  result = aggxDNU.instantiate
+  result.dataVar(DNU) = DNU(msg: msg, args: args, caller: caller)
+
+
+
+
+proc createMethodCallContext* (caller, recv:Object; msgName:string; args:seq[Object]): Object =
+  let (bc,msg) = recv.findMessage(msgName)
+  if msg.isNil:
+
+    let (bc,msg) = recv.findMessage("doesNotUnderstand:")
+    if msg.isNil:
+      return
+
+    result = createContext(msg,bc)
+    # TODO ctx.ty.components should be reordered
+    result.getComponent(result.ty.components.high).slotVar(0) = 
+      newDNU(msgName, args, caller)
+  else:
+    result = createContext(msg,bc)
+    let locals = result.getComponent(result.ty.components.high)
+    for i in 0 .. high(args):
+      locals.slotVar(i) = args[i]
+  
+  result.dataPtr(Context).caller = caller
+
+
+
 
 proc tick* (self: Object) = 
   let exe = self.dataPtr(Exec)
@@ -822,7 +867,7 @@ proc tick* (self: Object) =
       idx += L[]
 
     push obj
-    wdd: echo "  PushPOD($#)" % obj.send("print").asString[]
+    #wdd: echo "  PushPOD($#)" % obj.send("print").asString[]
 
   of Instr.PushBLOCK:
 
@@ -926,31 +971,44 @@ proc tick* (self: Object) =
       args[H-i] = pop()
 
     let recv = pop()
-    #echoCode frame.sp
 
-    let (bc,msg) = recv.findMessage(str)
-    if msg.isNil: 
-      recv.printcomponents
-      echo "msg is nil ($#) on ($#)".format(str, simpleRepr(recv))
+    let ctx = createMethodCallContext(
+      activeContext, recv, str, args )
+    if ctx.isNil:
+      # TODO replace with exception ? 
+      echo "doesNotUnderstand missing! fail execution. haha."
+    self.setActiveContext ctx
 
-    else:
-      ## create the context for the message, fill in its arguments
-      ## link the context to the current context, make the new context
-      ## active 
-      ## when the new context exits it will return to this context
-      ## and push its result on the stack
-      let ctx = createContext(msg, bc)
-      ctx.dataPtr(Context).caller = activeContext
-      let bc = ctx.getComponent(ctx.ty.components.high)
-      for i in 0 .. H:
-        bc.slotVar(i) = args[i]
-      # let arg_locals = cast[ptr UncheckedArray[Object]](
-      #   ctx.dat[ctx.ty.components[ctx.ty.components.high][0]].addr
-      # )
-      # for i in 0 .. H:
-      #   arg_locals[i] = args[i]
+    # let (bc,msg) = recv.findMessage(str)
+    # if msg.isNil: 
+    #   echo "msg is nil ($#) on ($#)".format(str, simpleRepr(recv))
+    #   let (bc,msg) = recv.findMessage("doesNotUnderstand:")
+    #   if not msg.isNil:
+    #     let ctx = createContext(msg,bc)
+    #     ctx.dataPtr(Context).caller = activeContext
+    #     let DNU = newDNU(str, args, thisContext.caller)
+    #     # TODO ctx.ty.components should be reordered
+    #     ctx.getComponent(ctx.ty.components.high).slotVar(0) = DNU
+    #     self.setActiveContext ctx
+    #   else:
+    #     # TODO replace with exception ? 
+    #     echo "doesNotUnderstand missing! fail execution. haha."
+    #     recv.printcomponents
+    #     exe.activeContext = nil
 
-      self.setActiveContext ctx
+    # else:
+    #   ## create the context for the message, fill in its arguments
+    #   ## link the context to the current context, make the new context
+    #   ## active 
+    #   ## when the new context exits it will return to this context
+    #   ## and push its result on the stack
+    #   let ctx = createContext(msg, bc)
+    #   ctx.dataPtr(Context).caller = activeContext
+    #   let bc = ctx.getComponent(ctx.ty.components.high)
+    #   for i in 0 .. H:
+    #     bc.slotVar(i) = args[i]
+      
+    #   self.setActiveContext ctx
 
 
   else:
@@ -1034,12 +1092,18 @@ proc send* (recv:Object; msg:string; args:varargs[Object]): Object =
 
 
 
+# not used in the vm
+defPrimitiveComponent(Int, int)
+defPrimitiveComponent(String, string)
+
 
 
 
 defineMessage(cxInt, "+") do (other):
   let other_int = other.dataVar(int)
   result = asObject(this.asVar(int) + other_int)
+defineMessage(cxInt, "-") do (other):
+  asObject(this.dataVar(int) - other.dataVar(int))
 
 defineMessage(cxInt, "print") do:
   result = asObject($ this.asVar(int))
@@ -1050,6 +1114,16 @@ defineMessage(cxString, "print") do:
 defineMessage(cxObj, "asString") do:
   result = self.send("print")
 
+
+
+
+# vm accessory types here 
+
+defineMessage(cxStack, "len") do -> Object:
+  this.dataPtr(Stack).len.asObject
+
+defineMessage(cxStack, "pop") do -> Object:
+  this.dataPtr(Stack).pop
 
 
 
