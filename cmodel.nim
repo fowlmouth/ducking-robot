@@ -103,6 +103,7 @@ proc genDecrefStmts (ty:NimNode, data:NimNode): NimNode {.compileTime.} =
       let field_ty = getType(field)
       let ftyk = field_ty.typekind
       if ftyk in {ntyString, ntyRef, ntySequence}:
+        echo field
         result.add(quote do:
           `data`.`field` = nil)
       else:

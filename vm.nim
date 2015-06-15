@@ -7,6 +7,8 @@ proc slotsComponent* (name: string; slots: varargs[string]): Component
 
 var 
   cxObj* = slotsComponent("Object")
+  obj_lobby* : Object ## defined later, this is where globals live
+  cxLobbyForward* = slotsComponent("LobbyForward")
 
   cxTrue* = slotsComponent("True")
   obj_true* = aggregate(cxTrue, cxObj).instantiate
@@ -129,21 +131,6 @@ proc findMessage* (ty: AggregateType; msg: string; res: var MessageSearch): bool
       result = true
       return
 
-# proc bindMessage* (e:Object; msg:string): Object =
-#   # creates a context
-
-#   let ty = e.safeType
-#   var ms: MessageSearch
-#   ms.continueFrom = high(ty.components)
-#   if ty.findMessage(msg, ms):
-#     ms.bound.self = e
-#     # create its context
-#     result = createContext(ms.msg, ms.bound)
-#     #result = ms.msg(ms.bound, args)
-
-#   else:
-#     echo "failed to find `",msg.repr,"` on entity ", cast[int](e)
-#     print_components(e)
 
 proc findMessage* (obj:Object; msg:string): (BoundComponent,Object) =
   let ty = obj.safeType
@@ -594,11 +581,12 @@ proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
   #echo cm.contextCreator.isNil
   result = instantiate aggregate(
     cm.contextCreator,
-    cxBoundComponent, 
+    cxBoundComponent, cxLobbyForward,
     cxStack, cxContext
   )
   result.dataVar(Context).highIP = cm.bytecode.high
   result.dataVar(Context).instrs = compiledMethod
+  result.dataVar(Context).parent = obj_lobby
   result.dataVar(BoundComponent) = bound
 
 
@@ -613,7 +601,7 @@ proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
 
 
 type Exec* = object
-  activeContext*, rootContext*: Object
+  activeContext*: Object #,rootContext*: Object
   bytePtr*: Object
   result*: Object
 
@@ -632,6 +620,9 @@ proc contextIsFinished* (some: ptr Exec): bool =
     return true
 
 proc ptrToBytecode* (some: ptr Exec): ptr UncheckedArray[byte] =
+  # provides a ptr to bytecode 0 of the active context's bytecode loc
+  # bytecode always lives in some method
+
   let ctx = some.activeContext.dataPtr(Context)
   let cm = ctx.instrs
   # result = cast[ptr UncheckedArray[byte]](
@@ -642,6 +633,7 @@ proc ptrToBytecode* (some: ptr Exec): ptr UncheckedArray[byte] =
   )
 
 proc setActiveContext* (someExec, ctx: Object) =
+  assert(not someExec.isNil)
   someExec.dataVar(Exec).activeContext = ctx
   if not ctx.isNIL:
     ctx.dataVar(Context).exec = someExec
@@ -662,6 +654,12 @@ const ShowInstruction =
   defined(Debug) or defined(ShowInstruction)
 
 
+type 
+  StrTab* = TableRef[string,Object]
+
+let cxStrTab* = typeComponent(StrTab)
+cxStrTab.aggr = aggregate(cxStrTab, cxObj)
+
 
 type DNU* = object
   msg*: string
@@ -676,8 +674,6 @@ cxDNU.aggr = aggxDNU
 proc newDNU* (msg:string, args:seq[Object], caller:Object): Object =
   result = aggxDNU.instantiate
   result.dataVar(DNU) = DNU(msg: msg, args: args, caller: caller)
-
-
 
 
 proc createMethodCallContext* (caller, recv:Object; msgName:string; args:seq[Object]): Object =
@@ -1035,34 +1031,42 @@ proc tick* (self: Object) =
 
 proc executorForContext* (ctx:Object): Object =
   result = aggxExec.instantiate
-  result.dataPtr(Exec).rootContext = ctx
+  #result.dataPtr(Exec).rootContext = ctx
   result.dataPtr(Exec).activeContext = ctx
 
 
 proc send* (recv:Object; msg:string; args:varargs[Object]): Object =
-  let (bc,msg) = recv.findMessage(msg)
-  if not bc.isValid: return
-
-  # validate that msg has args.len args
-  if msg.dataPtr(CompiledMethod).args.len != args.len:
-    return nil
 
   # instantiate the context
-  let ctx = createContext(msg, bc)
-  if ctx.isNil:
-    echo "ctx is nil??"
+  let ctx = 
+    createMethodCallContext(
+      nil, recv, msg, @args)
+  if ctx.isNil: return
 
-  # set the argument in the slots of the context ._.
-  if args.len > 0:
-    let idx = ctx.ty.components.high
-    let (offs, comp) = ctx.ty.components[idx]
-    let nSlots = comp.slots.len
-    if nSlots < args.len: return nil
-      # not enough slots to hold arguments? check here could be smarter
+  # let (bc,msg) = recv.findMessage(msg)
+  # if not bc.isValid: return
+
+  # # validate that msg has args.len args
+  # if msg.dataPtr(CompiledMethod).args.len != args.len:
+  #   return nil
+
+
+  # # instantiate the context
+  # let ctx = createContext(msg, bc)
+  # if ctx.isNil:
+  #   echo "ctx is nil??"
+
+  # # set the argument in the slots of the context ._.
+  # if args.len > 0:
+  #   let idx = ctx.ty.components.high
+  #   let (offs, comp) = ctx.ty.components[idx]
+  #   let nSlots = comp.slots.len
+  #   if nSlots < args.len: return nil
+  #     # not enough slots to hold arguments? check here could be smarter
     
-    let slots = cast[ptr UncheckedArray[Object]](ctx.dat[offs].addr)
-    for i in 0 .. args.high:
-      slots[i] = args[i]
+  #   let slots = cast[ptr UncheckedArray[Object]](ctx.dat[offs].addr)
+  #   for i in 0 .. args.high:
+  #     slots[i] = args[i]
 
   # instantiate and execute a vm
   #var ticks = 0
@@ -1126,4 +1130,21 @@ defineMessage(cxStack, "pop") do -> Object:
   this.dataPtr(Stack).pop
 
 
+
+defineMessage(cxStrTab, "at:") 
+do (str):
+  if this.asVar(StrTab).isNil: return nil
+
+  let s = str.asString
+  if s.isNil: return nil
+
+  result = this.dataVar(StrTab)[s[]]
+
+defineMessage(cxStrTab, "at:put:") 
+do (str,val):
+  let s = str.asString
+  if s.isNil: return nil
+  if this.dataVar(StrTab).isNil:
+    this.dataVar(StrTab) = newTable[string,Object](4)
+  this.dataVar(StrTab)[s[]] = val
 

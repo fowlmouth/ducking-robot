@@ -137,6 +137,7 @@ proc execute* (expresion:string): Object =
     return
   let ctx = createContext(meth, BoundComponent(self: nil, idx: 1))
   let o_exe = executorForContext(ctx)
+  ctx.dataVar(Context).exec = o_exe
   let exe = o_exe .dataPtr(Exec)
   while exe.isActive:
     #exe.tick
@@ -144,24 +145,34 @@ proc execute* (expresion:string): Object =
   result = exe.result
 
 
+let cxBlockForward = slotsComponent("BlockForward")
 
-
-let
-  cxBlockDNU = slotsComponent("BlockForwarder")
-defineMessage(cxBlockDNU, "doesNotUnderstand:") do (msg):
+defineMessage(cxBlockForward, "doesNotUnderstand:") do (msg):
   ## here I have to create a new context to call dnu.msg OR "doesNotUnderstand:"
   ## sending it to my parent context
-  ## 
-  ## at this point i realize i'm duplicating code from the Executor so i'll
-  ## make a new createMethodCallContextWithArgs() that can do most of the work
   ## 
   let dnu = msg.dataPtr(DNU)
   let thisCtx = self.dataPtr(Context)
   let parent = thisCtx.parent
   if not parent.isNil:
-    let newContext = createMethodCallContext(
+    let newCtx = createMethodCallContext(
       context, parent, dnu.msg, dnu.args)
-    thisCtx.exec.setActiveContext newContext
+    thisCtx.exec.setActiveContext newCtx
+
+defineMessage(cxLobbyForward, "doesNotUnderstand:") do (msg):
+  ## here I have to create a new context to call dnu.msg OR "doesNotUnderstand:"
+  ## sending it to my parent context
+  ## 
+  assert self != obj_lobby
+
+  let dnu = msg.dataPtr(DNU)
+  let newCtx = createMethodCallContext(
+    context, obj_lobby, dnu.msg, dnu.args)
+
+  self.printComponents
+  self.dataPtr(Context).exec.setActiveContext newCtx
+
+
 
 
 proc createBlockContext (blck, caller:Object): Object =
@@ -197,7 +208,7 @@ proc createBlockContext (blck, caller:Object): Object =
 
   let cxLocals = slotsComponent("Locals", locals)
   result = instantiate aggregate(
-    cxLocals, cxBlockDNU,
+    cxLocals, cxBlockForward,
     cxStack, cxContext
   )
   let ctx = result.dataPtr(Context)
@@ -242,6 +253,12 @@ defineMessage(cxExec, "tick") do:
 
 
 
+let cxOpenNullarySender* = slotsComponent("OpenNullarySender")
+defineMessage(cxOpenNullarySender, "doesNotUnderstand:") do (msg):
+  let dnu = msg.dataPtr(DNU)
+  if dnu.args.len == 0:
+    # send (self at: msg)
+    result = self.send("at:", asObject(dnu.msg))
 
-
-
+obj_lobby = aggregate(cxOpenNullarySender, cxStrTab, cxObj).instantiate
+discard obj_lobby.send("at:put:", asObject("Lobby"), obj_lobby)
