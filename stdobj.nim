@@ -135,7 +135,12 @@ proc execute* (expresion:string): Object =
   if meth.isNil:
     echo "failed to compile ", expresion
     return
-  let ctx = createContext(meth, BoundComponent(self: nil, idx: 1))
+  let bc = BoundComponent(
+    self: aggregate(cxObj).instantiate, 
+    comp: cxObj,
+    idx: 0
+  )
+  let ctx = createContext(meth, bc)
   let o_exe = executorForContext(ctx)
   ctx.dataVar(Context).exec = o_exe
   let exe = o_exe .dataPtr(Exec)
@@ -229,9 +234,11 @@ defineMessage(cxBlock, "value") do:
 
   context.dataPtr(Context).exec.setActiveContext(ctx)
 
+defineMessage(cxBoundComponent, "self") do: 
+  return this.dataPtr(BoundComponent).self
 
 defineMessage(cxContext, "caller") do:
-  result = this.asPtr(Context).caller
+  result = this.dataPtr(Context).caller
 
 defineMessage(cxContext, "return:to:") do (val,toContext):
   let ctx = this.dataPtr(Context)
