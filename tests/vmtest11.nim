@@ -56,33 +56,33 @@ Components Int define: 'test1' as: [
   1111
 ]
 """
-
 const testStr2 = """
 42 test1
 """
 
+const testStr3 = """
+Components Int define: 'test2:' as: [:arg|
+  self + arg + 1
+]
+"""
+const testStr4 = """
+1 test2: 2
+"""
+
 proc main =
-  let r = execute(testStr)
-  echo "-----------"
-  r.printcomponents
-  echo "--------------------"
-  assert execute(testStr2).dataVar(int) == 1111
-  #echo r.dataPtr(CompiledMethod).bytecode
+  block:
+    let r = execute(testStr)
+    echo "-----------"
+    r.printcomponents
+    echo "--------------------"
+    assert execute(testStr2).dataVar(int) == 1111
+  block:
+    let r = execute(testStr3)
+    echo "-----------"
+    r.printcomponents
+    echo "--------------------"
+    assert execute(testStr4).dataVar(int) == 4
+  
 
-
-  # let x = stdobj.parseExpression(testStr2)
-  # echo x
-  # echo "------------"
-
-
-  #let ob1 = asObject(42).send("test1")
-  # ob1.printcomponents
-  # assert ob1.dataVar(int) == 1111
-  #execute(testStr).send("value").dataVar(int) == 3
-  # let ob1 = execute(testStr)
-  # ob1.printcomponents
-  # let ob2 = ob1.send("value")
-  # ob2.printcomponents
-  # assert ob2.dataVar(int) == 3
 
 main()
