@@ -154,6 +154,7 @@ let
 type
   Block* = object
     ipStart*, ipEnd*: int
+    nArgs*, nLocals*: int
     argNamesAt*, argNamesBytes*: int
     meth*, lexicalParent*: Object
 let cxBlock* = typeComponent(Block)
@@ -908,6 +909,8 @@ proc tick* (self: Object) =
     let bp = obj.dataPtr(Block)
     bp.ipStart = idxStart
     bp.ipEnd = idxEnd-1
+    bp.nArgs = nArgs
+    bp.nLocals = nLocals
     bp.argNamesAt = idxForLocalNames
     bp.argNamesBytes = nBytesForLocalNames
     bp.meth = thisContext.instrs
