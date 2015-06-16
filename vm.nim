@@ -336,11 +336,16 @@ proc pushPOD* (i: var InstrBuilder; obj: Serializable) =
 
 import endians
 
-proc write* (i: var InstrBuilder; some: uint32) =
+proc write* (i: var InstrBuilder; some: uint32|int32) =
   let start = i.index
   i.addNullBytes sizeof(some)
   var some = some
   bigEndian32 i.iset[start].addr, some.addr
+proc write* (i: var InstrBuilder; some: uint16|int16) =
+  let st = i.index
+  i.addNullBytes sizeof(some)
+  var some = some
+  bigEndian16 i.iset[st].addr, some.addr
 
 proc pushBlock* (i:var InstrBuilder; args,locals:openarray[string]; iseq: var iseq) =
   echo i.iset
@@ -658,7 +663,8 @@ type
   StrTab* = TableRef[string,Object]
 
 let cxStrTab* = typeComponent(StrTab)
-cxStrTab.aggr = aggregate(cxStrTab, cxObj)
+let aggxStrTab* = aggregate(cxStrTab, cxObj)
+cxStrTab.aggr = aggxStrTab
 
 
 type DNU* = object
@@ -1133,12 +1139,14 @@ defineMessage(cxStack, "pop") do -> Object:
 
 defineMessage(cxStrTab, "at:") 
 do (str):
+  echo "strtab access ", str.asString[]
   if this.asVar(StrTab).isNil: return nil
 
   let s = str.asString
   if s.isNil: return nil
 
   result = this.dataVar(StrTab)[s[]]
+  echo result.isNil
 
 defineMessage(cxStrTab, "at:put:") 
 do (str,val):

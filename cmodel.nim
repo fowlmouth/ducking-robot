@@ -72,6 +72,9 @@ type
 var data_type_counter{.global.} = 1
 var staticComponents{.global.}: seq[Component] = @[]
 
+iterator knownStaticComponents* : Component = 
+  for i in 1 .. high(staticComponents):
+    yield staticComponents[i]
 
 proc castTo (fro,to:NimNode): NimNode {.compileTime.}=
   newTree(nnkCast, to, fro)

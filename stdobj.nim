@@ -30,6 +30,45 @@ proc unserialize* (some:var int; source:RawBytes): int =
     bigEndian64(some.addr, source)
     result = 8
 
+
+
+
+proc serialize* (some:string; builder:var InstrBuilder) =
+  assert some.len < uint16.high.int
+  builder.write some.len.uint16
+  let i = builder.index
+  builder.addNullBytes some.len
+  copymem builder.iset[i].addr, some.cstring, some.len
+
+#hack
+type PtrArr* [T] = ptr UncheckedArray[T]
+proc `+`* [T] (some:PtrArr[T], b:int): PtrArr[T] =
+  cast[PtrArr[T]](some[b].addr)
+template `+=`* (a: var PtrArr; b: int): stmt =
+  a = a + b
+
+proc read* (src: var PtrArr[char]; val: var (uint16|int16)): int =
+  bigEndian16 val.addr, src
+  result = sizeof(uint16)
+  src += result
+proc read* (src: var PtrArr[char]; nBytes: int; val: var string): int =
+  copymem val.cstring, src, nBytes
+  result = nBytes
+  src += result
+
+proc unserialize* (some:var string; source:RawBytes): int =
+  var src = cast[PtrArr[char]](source)
+  var strLen: uint16
+  result = src.read(strLen)
+  if some.isNil: some = newString(strLen.int)
+  else: some.setLen(strLen.int)
+  result += src.read(strLen.int, some)
+
+
+
+
+
+
 defineMessage(cxInt, "loadFromRaw:")
 do (byteSrc):
   let dat = byteSrc.dataPtr(RawBytes)
@@ -38,10 +77,13 @@ do (byteSrc):
   assert len_read == sizeof(int)
   result = objInt(len_read)
 
-
-
-
-
+defineMessage(cxString, "loadFromRaw:")
+do (byteSrc):
+  let dat = byteSrc.dataPtr(RawBytes)
+  let my_str = this.dataPtr(string)
+  let len_read = my_str[].unserialize dat[]
+  assert len_read == (my_str[].len + sizeof(uint16))
+  result = objInt(len_read)
 
 
 
@@ -64,6 +106,8 @@ proc compileNode (builder: var InstrBuilder; node: Node) =
   case node.kind
   of NK.IntLiteral:
     builder.pushPOD node.i
+  of NK.String:
+    builder.pushPOD node.str
 
   of NK.Message:
     # (msg recv arg0 arg1 ...)
@@ -100,7 +144,7 @@ proc compileNode (builder: var InstrBuilder; node: Node) =
       echo "what do with ", lisprepr(node)
       quit 1
   else:
-    echo "not ready to compile ", node
+    echo "not ready to compile ", lisprepr(node)
     quit 1
 
 
@@ -114,25 +158,28 @@ proc compileNode* (node: Node): Object =
   result.dataVar(CompiledMethod) = 
     initCompiledMethod(builder.done, args=[], locals=[])
 
+import options
+proc `>>=`* [A,B] (opt:Option[A]; fn:proc(some:A):B): Option[B] =
+  if opt.isSome: some fn opt.unsafeGet else: none B
+proc `$`* [A] (opt:Option[A]): string =
+  mixin `$`
+  result = if opt.isNone: "None" else: $opt.unsafeGet 
 
 let Expr = Expression()
-proc compileExpr* (str:string): Object =
-  let match = Expr.match(str)
-  if match.kind != mNodes: 
-    echo match
-    return
+proc parseExpression* (str:string): Option[Node] =
+  let m = Expr.match(str)
+  if m.kind == mNodes:
+    assert m.nodes.len == 1
+    return some m.nodes[0]
 
-  assert match.nodes.len == 1
-  let node = match.nodes[0]
-  echo node
-
-  result = compileNode(node)
+proc compileExpression* (str:string): Option[Object] =
+  parseExpression(str) >>= compileNode
 
 
 
 proc execute* (expresion:string): Object =
-  let meth = compileExpr(expresion)
-  if meth.isNil:
+  let meth = compileExpression(expresion)
+  if meth.isNone:
     echo "failed to compile ", expresion
     return
   let bc = BoundComponent(
@@ -140,7 +187,7 @@ proc execute* (expresion:string): Object =
     comp: cxObj,
     idx: 0
   )
-  let ctx = createContext(meth, bc)
+  let ctx = createContext(meth.unsafeGet, bc)
   let o_exe = executorForContext(ctx)
   ctx.dataVar(Context).exec = o_exe
   let exe = o_exe .dataPtr(Exec)
@@ -269,3 +316,28 @@ defineMessage(cxOpenNullarySender, "doesNotUnderstand:") do (msg):
 
 obj_lobby = aggregate(cxOpenNullarySender, cxStrTab, cxObj).instantiate
 discard obj_lobby.send("at:put:", asObject("Lobby"), obj_lobby)
+
+
+
+let
+  cxComponent* = typeComponent(Component)
+  aggxComponent* = aggregate(cxComponent, cxObj)
+cxComponent.aggr = aggxComponent
+
+let
+  cxAggregateType* = typeComponent(AggregateType)
+  aggxAggregateType* = aggregate(cxAggregateType, cxObj)
+cxAggregateType.aggr = aggxAggregateType
+
+let
+  componentDict = obj_lobby.ty.instantiate
+discard obj_lobby.send("at:put:", asObject("Components"), componentDict)
+for component in cmodel.knownStaticComponents():
+  if not component.isNil:
+    let co = aggxComponent.instantiate
+    co.dataVar(Component) = component
+    discard componentDict.send("at:put:", asObject(component.name), co)
+    echo "### defined ", component.name
+
+
+
