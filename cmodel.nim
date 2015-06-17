@@ -280,11 +280,11 @@ proc simpleRepr* (obj: Object): string =
   result.add ')'
 
 when defined(Debug):
-  var objBeingFreed*: proc(o:Object)
+  var objBeingFreed* = proc(o:Object) = 
+    echo "Object free'd: 0x",strutils.tohex(cast[int](obj), sizeof(pointer)*2)
+    echo "  (", printComponentNames(obj.ty), ")"
 proc freeObject* (obj: Object) =
   #obj.sendMessage("beingFreed")
-  echo "Object free'd: 0x",strutils.tohex(cast[int](obj), sizeof(pointer)*2)
-  echo "  (", printComponentNames(obj.ty), ")"
   when defined(Debug):
     if not objBeingFreed.isNil:
       objBeingFreed(obj)
@@ -300,7 +300,7 @@ proc freeObject* (obj: Object) =
       for idx in 0 .. high(component.slots):
         template slot: Object = my_data[idx]
         if not slot.isNil:
-          echo "slot ", component.slots[idx], " ref count: ", slot.getRefCount
+          #echo "slot ", component.slots[idx], " ref count: ", slot.getRefCount
           #GCunref slot
           slot = nil
 

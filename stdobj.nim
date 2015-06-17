@@ -148,11 +148,14 @@ proc compileNode (builder: var InstrBuilder; node: Node) =
     quit 1
 
 
-proc compileNode* (node: Node): Object =
+proc compileNode* (node: seq[Node]): Object =
   # creates an argumentless CompiledMethod that 
   # can be run with a fake bound component for context
   var builder = initInstrBuilder()
-  builder.compileNode node
+  for i in 0 .. high(node):
+    builder.compileNode node[i]
+    if i < high(node):
+      builder.pop
 
   result = aggxCompiledMethod.instantiate
   result.dataVar(CompiledMethod) = 
@@ -165,20 +168,29 @@ proc `$`* [A] (opt:Option[A]): string =
   mixin `$`
   result = if opt.isNone: "None" else: $opt.unsafeGet 
 
-let Expr = Expression()
-proc parseExpression* (str:string): Option[Node] =
-  let m = Expr.match(str)
-  if m.kind == mNodes:
-    assert m.nodes.len == 1
-    return some m.nodes[0]
+let Expr = Expression
+proc parseExpressions* (str:string): Option[seq[Node]] =
+  let m = kwdgrammar.Stmts.match(str)
+  if m.kind == mNodes: return some m.nodes
 
-proc compileExpression* (str:string): Option[Object] =
-  parseExpression(str) >>= compileNode
+  # var input = InputState(str: str, len: str.len)
+  # while true:
+  #   let m = Expr.m(input)
+  #   if m.kind == mNodes:
+  #     assert m.nodes.len == 1
+  #     if result.isNone: result = some(@[m.nodes[0]])
+  #     else: result.unsafeGet.add m.nodes[0]
+  #     discard 
+  #   else:
+  #     break
+
+proc compileExpressions* (str:string): Option[Object] =
+  parseExpressions(str) >>= compileNode
 
 
 
 proc execute* (expresion:string): Object =
-  let meth = compileExpression(expresion)
+  let meth = compileExpressions(expresion)
   if meth.isNone:
     echo "failed to compile ", expresion
     return
@@ -197,9 +209,9 @@ proc execute* (expresion:string): Object =
   result = exe.result
 
 
-let cxBlockForward = slotsComponent("BlockForward")
+let cxBlockContext = slotsComponent("BlockContext")
 
-defineMessage(cxBlockForward, "doesNotUnderstand:") do (msg):
+defineMessage(cxBlockContext, "doesNotUnderstand:") do (msg):
   ## here I have to create a new context to call dnu.msg OR "doesNotUnderstand:"
   ## sending it to my parent context
   ## 
@@ -211,7 +223,7 @@ defineMessage(cxBlockForward, "doesNotUnderstand:") do (msg):
       context, parent, dnu.msg, dnu.args)
     thisCtx.exec.setActiveContext newCtx
 
-defineMessage(cxLobbyForward, "doesNotUnderstand:") do (msg):
+defineMessage(cxLobbyContext, "doesNotUnderstand:") do (msg):
   ## here I have to create a new context to call dnu.msg OR "doesNotUnderstand:"
   ## sending it to my parent context
   ## 
@@ -260,7 +272,7 @@ proc createBlockContext (blck, caller:Object): Object =
 
   let cxLocals = slotsComponent("Locals", locals)
   result = instantiate aggregate(
-    cxLocals, cxBlockForward,
+    cxLocals, cxBlockContext,
     cxStack, cxContext
   )
   let ctx = result.dataPtr(Context)
@@ -332,12 +344,16 @@ cxAggregateType.aggr = aggxAggregateType
 let
   componentDict = obj_lobby.ty.instantiate
 discard obj_lobby.send("at:put:", asObject("Components"), componentDict)
+
+proc registerComponent (co: Component) =
+  if not co.isNil:
+    let obj = aggxComponent.instantiate
+    obj.dataVar(Component) = co
+    discard componentDict.send(
+      "at:put:", asObject(co.name), obj)
+    echo "### defined ", co.name
+
 for component in cmodel.knownStaticComponents():
-  if not component.isNil:
-    let co = aggxComponent.instantiate
-    co.dataVar(Component) = component
-    discard componentDict.send("at:put:", asObject(component.name), co)
-    echo "### defined ", component.name
-
-
-
+  registerComponent component
+for component in [cxTrue, cxFalse, cxObj, cxUndef, cxOpenNullarySender, cxBlockContext]:
+  registerComponent component

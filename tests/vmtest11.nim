@@ -4,10 +4,8 @@ import options,kwdgrammar
 
 defineMessage(cxComponent, "define:as:") 
 do (msg,blck):
-  let m = aggxCompiledMethod.instantiate
   let pBlock = blck.dataPtr(Block)
   assert(not pBlock.isNil)
-  blck.printcomponents
 
   # define a CompiledMethod out of the bytecode for this blck
   let method_owner = pBlock.meth
@@ -54,6 +52,9 @@ do (msg,blck):
 const testStr = """
 Components Int define: 'test1' as: [
   1111
+].
+Components Int define: 'test2:' as: [:arg|
+  self + arg + 1
 ]
 """
 const testStr2 = """
@@ -61,9 +62,6 @@ const testStr2 = """
 """
 
 const testStr3 = """
-Components Int define: 'test2:' as: [:arg|
-  self + arg + 1
-]
 """
 const testStr4 = """
 1 test2: 2
@@ -75,14 +73,23 @@ proc main =
     echo "-----------"
     r.printcomponents
     echo "--------------------"
-    assert execute(testStr2).dataVar(int) == 1111
+    assert execute("42 test1").dataVar(int) == 1111
+    assert execute("1 test2: 2").dataVar(int) == 4
+
   block:
-    let r = execute(testStr3)
-    echo "-----------"
-    r.printcomponents
-    echo "--------------------"
-    assert execute(testStr4).dataVar(int) == 4
-  
+    assert nil != execute("""
+Components True define: 'ifTrue:' as: [:block|
+  block value
+].
+Components False define: 'ifTrue:' as: [:block|
+  nil
+].
+Components Block define: 'ifTrue:' as: [:block|
+  self value ifTrue: block
+]
+""")
+    let o = execute("[true] ifTrue: [1]")
+    o.printcomponents
 
 
 main()

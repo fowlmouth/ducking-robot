@@ -8,7 +8,7 @@ proc slotsComponent* (name: string; slots: varargs[string]): Component
 var 
   cxObj* = slotsComponent("Object")
   obj_lobby* : Object ## defined later, this is where globals live
-  cxLobbyForward* = slotsComponent("LobbyForward")
+  cxLobbyContext* = slotsComponent("LobbyContext")
 
   cxTrue* = slotsComponent("True")
   obj_true* = aggregate(cxTrue, cxObj).instantiate
@@ -357,8 +357,6 @@ proc pushBlock* (i:var InstrBuilder; args,locals:openarray[string]; iseq: var is
   let localsSizeIDX = i.index
   i.addNullBytes sizeof(uint16)
 
-  echo " -> ", i.iset
-
   for s in args:
     let start = i.index
     i.addNullBytes s.len+1
@@ -371,15 +369,11 @@ proc pushBlock* (i:var InstrBuilder; args,locals:openarray[string]; iseq: var is
   var localsSizeU16 = uint16(i.index - localsSizeIDX - sizeof(uint16))
   bigEndian16 i.iset[localsSizeIDX].addr, localsSizeU16.addr
 
-  echo " <- ", i.iset
-
   let L = iseq.len
   i.write uint32(L)
   let start = i.index
   i.addNullBytes L
   copyMem i.iset[start].addr, iseq[0].addr, L
-
-  echo i.iset
 
   # i.addByte args.len
   # for idx in 0 .. high(args):
@@ -587,7 +581,7 @@ proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
   #echo cm.contextCreator.isNil
   result = instantiate aggregate(
     cm.contextCreator,
-    cxBoundComponent, cxLobbyForward,
+    cxBoundComponent, cxLobbyContext,
     cxStack, cxContext
   )
   result.dataVar(Context).highIP = cm.bytecode.high
@@ -766,6 +760,13 @@ proc tick* (self: Object) =
   of Instr.Pop:
     idx += 1
     discard pop()
+
+  of Instr.PushFALSE:
+    idx += 1
+    push obj_false
+  of Instr.PushTRUE:
+    idx += 1
+    push obj_true
 
   of Instr.PushNIL:
     idx += 1
@@ -1022,9 +1023,9 @@ proc tick* (self: Object) =
     quit 1
 
   thisContext.ip = idx
-  echo op.Instr, " next IP here: ", thisContext.ip, "/", thisContext.highIP
 
   when defined(Debug) or defined(ShowStack):
+    echo op.Instr, " next IP here: ", thisContext.ip, "/", thisContext.highIP
     echo "stack.len = ", thisStack.len
 
 
