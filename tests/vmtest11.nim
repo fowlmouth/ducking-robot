@@ -27,6 +27,7 @@ do (msg,blck):
   ]
   let locals_ip = ipSource + pBlock.argNamesAt
   var tab_id, arg_idx = 0
+  if pBlock.nargs == 0: tab_id += 1
   var cur = ""
   for i in 0 .. < pBlock.argNamesBytes:
     let c = locals_ip[i]
@@ -35,61 +36,156 @@ do (msg,blck):
       if arg_idx > locals[tab_id].high:
         tab_id += 1
         arg_idx = 0
+
     else:
+      #echo tab_id,":",arg_idx, "  ", pBlock.nargs, ",",pBlock.nlocals
       locals[tab_id][arg_idx].safeAdd(c)
 
+  let m = msg.asString[]
   result = aggxCompiledMethod.instantiate
   result.dataVar(CompiledMethod) = 
     initCompiledMethod(
+      this.dataVar(Component).name & "#" & m,
       iseq,
       args = locals[0],
       locals = locals[1])
 
-  this.dataVar(Component).rawDefine msg.asString[], result
+  this.dataVar(Component).rawDefine m, result
 
 
+defineMessage(cxObj, "print") do:
+  asObject("($#)".format(self.safeType.printComponentNames(", ")))
 
-const testStr = """
-Components Int define: 'test1' as: [
-  1111
-].
-Components Int define: 'test2:' as: [:arg|
-  self + arg + 1
-]
-"""
-const testStr2 = """
-42 test1
-"""
+defineMessage(cxContext, "setIP:") do (ip):
+  echo "ip = ", self.dataPtr(Context).ip
+  echo ip.safeType.printcomponentnames
+  this.dataPtr(Context).ip = ip.dataVar(int)
+  echo " now ip =  ", ip.dataVar(int)
 
-const testStr3 = """
-"""
-const testStr4 = """
-1 test2: 2
-"""
+defineMessage(cxBlockContext, "firstIP") do:
+  let owner = this.dataPtr(BlockContext).owningBlock
+  result = owner.dataPtr(Block).ipStart.asObject
+defineMessage(cxMethodContext, "firstIP") do:
+  asObject(0)
+
+defineMessage(cxContext, "highIP") do:
+  result = this.dataPtr(Context).highIP.asObject
+
+
+defineMessage(cxMethodContext, "retry") do:
+  let ctx = self.dataPtr(Context)
+  if not ctx.isNil:
+    ctx.ip = 0
+defineMessage(cxBlockContext, "retry") do:
+  let bc = this.dataPtr(BlockContext)
+  let ctx = self.dataPtr(Context)
+  assert(not ctx.isNil)
+  ctx.ip = bc.owningBlock.dataPtr(Block).ipStart
+
 
 proc main =
   block:
-    let r = execute(testStr)
-    echo "-----------"
-    r.printcomponents
-    echo "--------------------"
-    assert execute("42 test1").dataVar(int) == 1111
-    assert execute("1 test2: 2").dataVar(int) == 4
+    assert isSome execute("""
 
-  block:
-    assert nil != execute("""
+
+Components True define: 'print' as: [
+  'true'
+].
+Components False define: 'print' as: [
+  'false'
+].
+Components Undef define: 'print' as: [
+  'nil'
+].
+
+
+
 Components True define: 'ifTrue:' as: [:block|
   block value
 ].
 Components False define: 'ifTrue:' as: [:block|
   nil
 ].
+Components Undef define: 'ifTrue:' as: [:block|
+  nil
+].
+
+Components True define: 'ifTrue:else:' as: [:trueBlock :falseBlock|
+  trueBlock value
+].
+Components False define: 'ifTrue:else:' as: [:trueBlock :falseBlock|
+  falseBlock value
+].
+Components Undef define: 'ifTrue:else:' as: [:trueBlock :falseBlock|
+  falseBlock value
+].
+
+
+
+
+Components True define: 'ifFalse:' as: [:block|
+  nil
+].
+Components False define: 'ifFalse:' as: [:block|
+  block value
+].
+Components Undef define: 'ifFalse:' as: [:block|
+  block value
+].
+
+
 Components Block define: 'ifTrue:' as: [:block|
   self value ifTrue: block
+].
+Components Block define: 'ifTrue:else:' as: [:trueBlock :falseBlock|
+  self value ifTrue: trueBlock else: falseBlock
+].
+Components Block define: 'whileTrue:' as: [:block |
+  [
+    self value ifFalse: [^ nil].
+    block value
+  ] loopForever
+].
+
+Components Block define:'loopForever' as:[
+  self value.
+  thisContext retry
+].
+
+Components Int define: 'factorial' as: [
+  [self < 2] ifTrue: [^ 1].
+  ^ self * (self-1) factorial
 ]
+
 """)
-    let o = execute("[true] ifTrue: [1]")
+    echo "----------------------"
+
+    # var o = execute("Lobby retry")
+    # assert o == nil
+    let print_backtrace = proc(exe:Object) =
+      let e = exe.dataPtr(Exec)
+      var ctx = e.activeContext
+      var i = 0
+      while not ctx.isNil:
+        #echo ctx.safetype.printComponentNames 
+        echo i,": ", ctx.findComponent("Locals").slotNames
+        echo "  ", ctx.dataPtr(Context).instrs.dataPtr(CompiledMethod).name
+        ctx = ctx.dataPtr(Context).caller
+
+    discard "[x| x: 0. [x < 2] whileTrue: [x: x + 1]. ^x. 2] value"
+    let ss = "[x| x: 0. [x < 2] whileTrue: [x: x + 1]. x printValue] value"
+
+    let o = execute(
+      ss).unsafeget
+      #"").unsafeget#, do_between = print_backtrace).unsafeget
+    #"[x| x:1. x<2 ifTrue: [^true]. ^false] value")
     o.printcomponents
+    echo o.send("print").asString[]
+
+    # # should loop forever..
+    # o = execute("retry")
+    # o.printcomponents
+    # echo "RESULT: ", o.asString[]
 
 
 main()

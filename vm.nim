@@ -8,7 +8,7 @@ proc slotsComponent* (name: string; slots: varargs[string]): Component
 var 
   cxObj* = slotsComponent("Object")
   obj_lobby* : Object ## defined later, this is where globals live
-  cxLobbyContext* = slotsComponent("LobbyContext")
+  cxMethodContext* = slotsComponent("MethodContext")
 
   cxTrue* = slotsComponent("True")
   obj_true* = aggregate(cxTrue, cxObj).instantiate
@@ -106,6 +106,23 @@ proc slotVar* (bc: BoundComponent; idx: int): var Object =
   bc.slotPtr(idx)[]
 
 
+proc findComponent* (some: Object; name: string): BoundComponent {.inline.}=
+  let ty = some.safeType
+  let idx = ty.findComponentIndex(name)
+  result.self = some
+  result.idx = idx
+  if idx == -1:
+    return
+  result.comp = ty.components[idx][1]
+
+proc slotNames* (some: BoundComponent): seq[string] =
+  if not some.isValid or 
+      some.comp.isNil or
+      some.comp.isBehavior or
+      some.comp.kind == ComponentKind.Static: 
+    return @[]
+  return some.comp.slots
+
 
 
 
@@ -161,6 +178,7 @@ let cxBlock* = typeComponent(Block)
 
 type
   CompiledMethod* = object
+    name*: string
     bytecode*: seq[byte]
     args,locals: seq[string]
     contextCreator*: Component ## component with slots for args and locals to hold state in the context object
@@ -169,13 +187,14 @@ let
   aggxCompiledMethod* = aggregate(cxCompiledMethod, cxObj)
 
 
-proc initCompiledMethod* (bytecode:seq[byte]; args,locals:openarray[string]=[]): CompiledMethod =
+proc initCompiledMethod* (name:string; bytecode:seq[byte]; args,locals:openarray[string]=[]): CompiledMethod =
   result = CompiledMethod(
+    name: name,
     bytecode:bytecode,
     args: @args,
     locals: @locals
   )
-  result.contextCreator = slotsComponent("locals", result.args & result.locals)
+  result.contextCreator = slotsComponent("Locals", result.args & result.locals)
 
 
 
@@ -348,8 +367,9 @@ proc write* (i: var InstrBuilder; some: uint16|int16) =
   var some = some
   bigEndian16 i.iset[st].addr, some.addr
 
-proc pushBlock* (i:var InstrBuilder; args,locals:openarray[string]; iseq: var iseq) =
-  echo i.iset
+proc pushBlock* (i:var InstrBuilder; 
+      args,locals:openarray[string]; 
+      iseq: var iseq) =
 
   i.addByte Instr.PushBLOCK
   i.addByte args.len
@@ -375,27 +395,6 @@ proc pushBlock* (i:var InstrBuilder; args,locals:openarray[string]; iseq: var is
   i.addNullBytes L
   copyMem i.iset[start].addr, iseq[0].addr, L
 
-  # i.addByte args.len
-  # for idx in 0 .. high(args):
-  #   let start = i.index
-  #   i.addNullBytes args[idx].len+1
-  #   copyMem i.iset[start].addr, args[idx].cstring, args[idx].len
-
-  # i.addByte locals.len
-  # for idx in 0 .. high(locals):
-  #   let start = i.index
-  #   i.addNullBytes locals[idx].len+1
-  #   copyMem i.iset[start].addr, locals[idx].cstring, locals[idx].len
-
-  # block:
-  #   let start = i.index
-  #   i.addNullBytes 4
-  #   var len = iseq.len.uint32
-  #   bigEndian32(i.iset[start].addr, len.addr)
-
-  #   let instrs_start = i.index
-  #   i.addNullBytes len.int
-  #   copyMem i.iset[instrs_start].addr, iseq[0].addr, len
 
 
 proc pushThisContext* (i: var InstrBuilder) =
@@ -417,6 +416,10 @@ proc dup* (i: var InstrBuilder) =
 proc pop* (i: var InstrBuilder) =
   ## stack effect ( object -- )
   i.addByte Instr.Pop
+
+proc ret* (i: var InstrBuilder) =
+  ## stack effect ( object -- )
+  i.addByte Instr.Return
 
 proc send* (i: var InstrBuilder; msg:string; args:int) =
   let L = msg.len
@@ -461,7 +464,7 @@ proc newPrimitiveMessage* (args:openarray[string]; name,src:string; fn:Primitive
   var ibuilder = initInstrBuilder()
   ibuilder.execPrimitive
   let cm = result.dataPtr(CompiledMethod)
-  cm[] = initCompiledMethod(ibuilder.done, args=args, locals=[])
+  cm[] = initCompiledMethod(name, ibuilder.done, args=args, locals=[])
 
 
 
@@ -487,6 +490,7 @@ proc readSlot (idx:int): Object =
 
   result.dataVar(CompiledMethod) = 
     initCompiledMethod(
+      "slotReader#"& $idx,
       ibuilder.done,
       args=[] )
 
@@ -514,6 +518,7 @@ proc writeSlot (idx:int): Object =
 
   result.dataVar(CompiledMethod) = 
     initCompiledMethod(
+      "slotWriter#"& $idx,
       ib.done,  args=["val"]  )
 
 
@@ -561,18 +566,19 @@ proc top* (some: ptr Stack): Object =
   if some.isNil or some[].isNil or some[].len == 0: return
   return some[][some[].high]
 
-
-
 type 
   Context* = object
-    parent*: Object # lexical parent context (where the block was instantiated from)
-      # for methods this may be a link to global state? not sure yet
     caller*: Object # 
-    instrs*: Object ## CompiledMethod or Block
-    exec*: Object
+    instrs*: Object ## CompiledMethod where instructions live
+    exec*: Object ## owner Exec 
     ip*, highIP*: int
 
-let cxContext* = typeComponent(Context)
+  BlockContext* = object
+    lexicalParent*, owningBlock*: Object
+
+let 
+  cxContext* = typeComponent(Context)
+  cxBlockContext* = typeComponent(BlockContext)
 
 proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
   ## allocates a context for a method
@@ -580,13 +586,14 @@ proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
   let cm = compiledMethod.dataPtr(CompiledMethod)
   #echo cm.contextCreator.isNil
   result = instantiate aggregate(
-    cm.contextCreator,
-    cxBoundComponent, cxLobbyContext,
+    cm.contextCreator, 
+    cxMethodContext,
+    cxBoundComponent, 
     cxStack, cxContext
   )
   result.dataVar(Context).highIP = cm.bytecode.high
   result.dataVar(Context).instrs = compiledMethod
-  result.dataVar(Context).parent = obj_lobby
+  #result.dataVar(Context).parent = obj_lobby
   result.dataVar(BoundComponent) = bound
 
 
@@ -698,6 +705,9 @@ proc createMethodCallContext* (caller, recv:Object; msgName:string; args:seq[Obj
   result.dataPtr(Context).caller = caller
 
 
+type VMException* = object of Exception
+proc vmException* (strs: varargs[string]) =
+  raise newException(VMException, strs.join(""))
 
 
 proc tick* (self: Object) = 
@@ -776,6 +786,38 @@ proc tick* (self: Object) =
     idx += 1
     push activeContext
 
+  of Instr.Return:
+    idx += 1
+    let obj = pop()
+    # search for .parent until we find a method
+
+    proc methodOwner (ctx: Object): Object =
+      result = ctx
+      while true:
+        echo ".", result.dataPtr(Context).instrs.dataPtr(CompiledMethod).name
+        var bc = result.dataPtr(BlockContext)
+        if bc.isNil or bc.lexicalParent.isNil: 
+          assert(result.safeType.findComponentIndex(cxMethodContext) != -1)
+          break
+        result = bc.lexicalParent
+        # if result.safeType.findComponentIndex(cxMethodContext) != -1:
+        #   return
+
+      # var par = ctx.dataPtr(Context).parent
+      # while not par.isNil:
+      #   result = par
+      #   par = result.dataPtr(Context).parent
+    let next = methodOwner activeContext
+
+    assert next.dataPtr(Context).exec == self
+    assert next.dataPtr(Context).caller != nil
+    let caller = next.dataPtr(Context).caller
+
+    # echo "^ return ", obj.safeType.printComponentNames()," to ", 
+    #   next.dataPtr(Context).instrs.dataPtr(CompiledMethod).name
+    caller.dataPtr(Stack).push(obj)
+    self.setActiveContext(caller)
+
   of Instr.ExecPrimitive:
     idx += 1
     # execute the primitive attached to the currently running context
@@ -793,6 +835,7 @@ proc tick* (self: Object) =
           #activeContext.printcomponents
           push nil
         else:
+          #activeContext.printcomponents
           let res = pm.fn(activeContext, bc[])
           push res
     else:
@@ -860,9 +903,7 @@ proc tick* (self: Object) =
 
     let obj = ty.aggr.instantiate()
     if obj.isNil:
-      echo "NEW POD ", ty.name, " FAILED  TO LOAD"
-    else:
-      wdd: obj.printcomponents
+      vmException("NEW POD ", ty.name, " FAILED  TO LOAD")
 
     let o2 = obj.send("loadFromRaw:", src)
     let L  = o2.dataPtr(int)
@@ -917,41 +958,6 @@ proc tick* (self: Object) =
     bp.meth = thisContext.instrs
     bp.lexicalParent = activeContext
     push obj
-
-    # var args = newSeq[string](nArgs)
-    # idx += 1
-    # for arg in 0 .. <nArgs:
-    #   var start = idx
-    #   var str: array[129,char]
-    #   for i in 0 .. 128:
-    #     str[i] = iset[start+i].char
-    #     if str[i] == '\00':
-    #       idx += i
-    #       break
-    #   args[arg] = $ str[0].addr.cstring
-    #   idx += 1
-
-    # let nLocals = iset[idx].int
-    # var locals = newSeq[string](nLocals)
-    # idx += 1
-    # for arg in 0 .. <nLocals:
-    #   var start = idx
-    #   var str: array[129,char]
-    #   for i in 0 .. 128:
-    #     str[i] = iset[start+i].char
-    #     if str[i] == '\00':
-    #       idx += i
-    #       break
-    #   locals[arg] = $ str[0].addr.cstring
-    #   idx += 1
-
-    # var bytecode_len: uint32
-    # bigEndian32(bytecode_len.addr, iset[idx].addr)
-    # idx += 4
-    # let bc_start = idx
-    # idx += bytecode_len.int
-    # let bc_end = idx
-
     
 
   of Instr.Send:
@@ -983,39 +989,8 @@ proc tick* (self: Object) =
     if ctx.isNil:
       # TODO replace with exception ? 
       echo "doesNotUnderstand missing! fail execution. haha."
+      echo "  msg was ", str
     self.setActiveContext ctx
-
-    # let (bc,msg) = recv.findMessage(str)
-    # if msg.isNil: 
-    #   echo "msg is nil ($#) on ($#)".format(str, simpleRepr(recv))
-    #   let (bc,msg) = recv.findMessage("doesNotUnderstand:")
-    #   if not msg.isNil:
-    #     let ctx = createContext(msg,bc)
-    #     ctx.dataPtr(Context).caller = activeContext
-    #     let DNU = newDNU(str, args, thisContext.caller)
-    #     # TODO ctx.ty.components should be reordered
-    #     ctx.getComponent(ctx.ty.components.high).slotVar(0) = DNU
-    #     self.setActiveContext ctx
-    #   else:
-    #     # TODO replace with exception ? 
-    #     echo "doesNotUnderstand missing! fail execution. haha."
-    #     recv.printcomponents
-    #     exe.activeContext = nil
-
-    # else:
-    #   ## create the context for the message, fill in its arguments
-    #   ## link the context to the current context, make the new context
-    #   ## active 
-    #   ## when the new context exits it will return to this context
-    #   ## and push its result on the stack
-    #   let ctx = createContext(msg, bc)
-    #   ctx.dataPtr(Context).caller = activeContext
-    #   let bc = ctx.getComponent(ctx.ty.components.high)
-    #   for i in 0 .. H:
-    #     bc.slotVar(i) = args[i]
-      
-    #   self.setActiveContext ctx
-
 
   else:
     
@@ -1112,12 +1087,20 @@ defPrimitiveComponent(String, string)
 
 
 
-
+# defineMessage(cxInt, "*") do (other):
+#   let other_int = other.dataVar(int)
+#   result = asObject(this.dataVar(int) + other_int)
 defineMessage(cxInt, "+") do (other):
   let other_int = other.dataVar(int)
   result = asObject(this.asVar(int) + other_int)
 defineMessage(cxInt, "-") do (other):
   asObject(this.dataVar(int) - other.dataVar(int))
+defineMessage(cxInt, "<") do (other):
+  return
+    if this.dataVar(int) < other.dataVar(int):
+      obj_true
+    else:
+      obj_false
 
 defineMessage(cxInt, "print") do:
   result = asObject($ this.asVar(int))
@@ -1143,14 +1126,13 @@ defineMessage(cxStack, "pop") do -> Object:
 
 defineMessage(cxStrTab, "at:") 
 do (str):
-  echo "strtab access ", str.asString[]
+  wdd: echo "strtab access ", str.asString[]
   if this.asVar(StrTab).isNil: return nil
 
   let s = str.asString
   if s.isNil: return nil
 
   result = this.dataVar(StrTab)[s[]]
-  echo result.isNil
 
 defineMessage(cxStrTab, "at:put:") 
 do (str,val):

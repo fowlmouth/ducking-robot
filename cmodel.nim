@@ -246,7 +246,10 @@ proc findComponentIndex* (ty: AggregateType; co: Component): int =
   proc `==` (a: (int,Component), b: Component): bool =
     a[1] == b
   ty.components.rfind(co)
-
+proc findComponentIndex* (ty: AggregateType; componentName: string): int =
+  proc `==` (a: (int,Component), b: string): bool =
+    a[1].name == b
+  ty.components.rfind(componentName)
 
 proc findComponentOffset* (ty: AggregateType; co: Component): int =
   result = ty.findComponentIndex co

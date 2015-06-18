@@ -129,6 +129,10 @@ proc compileNode (builder: var InstrBuilder; node: Node) =
     var iseq = new_builder.done
     builder.pushBlock node.args, node.locals, iseq
 
+  of NK.Return:
+    builder.compileNode node.sub[0]
+    builder.ret
+
   of NK.Ident:
     case node.str.toLower
     of "thiscontext":
@@ -148,7 +152,9 @@ proc compileNode (builder: var InstrBuilder; node: Node) =
     quit 1
 
 
-proc compileNode* (node: seq[Node]): Object =
+import options
+
+proc compileNode* (node: seq[Node]): Option[Object] =
   # creates an argumentless CompiledMethod that 
   # can be run with a fake bound component for context
   var builder = initInstrBuilder()
@@ -157,18 +163,18 @@ proc compileNode* (node: seq[Node]): Object =
     if i < high(node):
       builder.pop
 
-  result = aggxCompiledMethod.instantiate
-  result.dataVar(CompiledMethod) = 
-    initCompiledMethod(builder.done, args=[], locals=[])
+  let o = aggxCompiledMethod.instantiate
+  o.dataVar(CompiledMethod) = 
+    initCompiledMethod("anon", builder.done, args=[], locals=[])
+  result = some o
 
-import options
-proc `>>=`* [A,B] (opt:Option[A]; fn:proc(some:A):B): Option[B] =
-  if opt.isSome: some fn opt.unsafeGet else: none B
+proc `>>=`* [A,B] (opt:Option[A]; fn:proc(some:A):Option[B]): Option[B] =
+  if opt.isSome: fn opt.unsafeGet else: none B
+
 proc `$`* [A] (opt:Option[A]): string =
   mixin `$`
   result = if opt.isNone: "None" else: $opt.unsafeGet 
 
-let Expr = Expression
 proc parseExpressions* (str:string): Option[seq[Node]] =
   let m = kwdgrammar.Stmts.match(str)
   if m.kind == mNodes: return some m.nodes
@@ -185,31 +191,59 @@ proc parseExpressions* (str:string): Option[seq[Node]] =
   #     break
 
 proc compileExpressions* (str:string): Option[Object] =
+  ## compiles a string of top-level expressions separated by periods.
+  ##
   parseExpressions(str) >>= compileNode
 
-
-
-proc execute* (expresion:string): Object =
-  let meth = compileExpressions(expresion)
-  if meth.isNone:
-    echo "failed to compile ", expresion
-    return
-  let bc = BoundComponent(
-    self: aggregate(cxObj).instantiate, 
-    comp: cxObj,
-    idx: 0
-  )
-  let ctx = createContext(meth.unsafeGet, bc)
-  let o_exe = executorForContext(ctx)
+proc executeMethodAnony* (meth:Object): Option[Object] =
+  let 
+    ctx = 
+      createContext(meth, 
+        BoundComponent(
+          self: aggregate(cxObj).instantiate, 
+          comp: cxObj,
+          idx: 0
+      ) )
+    o_exe = executorForContext(ctx)
+    exe = o_exe.dataPtr(Exec)
   ctx.dataVar(Context).exec = o_exe
-  let exe = o_exe .dataPtr(Exec)
   while exe.isActive:
     #exe.tick
     tick(o_exe)
-  result = exe.result
+  result = some exe.result
+
+proc execute* (expresion:string): Option[Object] =
+  # let meth = compileExpressions(expresion)
+  # if meth.isNone:
+  #   echo "failed to compile ", expresion
+  #   return
+  # result = executeMethodAnony meth.unsafeGet
+  result = 
+   compileExpressions(expresion) >>= 
+    executeMethodAnony
+  
+proc execute* (expresion:string; do_between:proc(exe:Object)): Option[Object] =
+  let meth = compileExpressions(expresion)
+  if meth.isNone: return
+
+  let 
+    ctx = 
+      createContext(meth.unsafeGet,
+        BoundComponent(
+          self: aggregate(cxObj).instantiate, 
+          comp: cxObj,
+          idx: 0
+      ) )
+    o_exe = executorForContext(ctx)
+    exe = o_exe.dataPtr(Exec)
+  ctx.dataVar(Context).exec = o_exe
+  while exe.isActive:
+    tick o_exe
+    do_between o_exe
+  result = some exe.result
 
 
-let cxBlockContext = slotsComponent("BlockContext")
+#let cxBlockContext = slotsComponent("BlockContext")
 
 defineMessage(cxBlockContext, "doesNotUnderstand:") do (msg):
   ## here I have to create a new context to call dnu.msg OR "doesNotUnderstand:"
@@ -217,13 +251,14 @@ defineMessage(cxBlockContext, "doesNotUnderstand:") do (msg):
   ## 
   let dnu = msg.dataPtr(DNU)
   let thisCtx = self.dataPtr(Context)
-  let parent = thisCtx.parent
+  let parent = this.dataPtr(BlockContext).lexicalParent
+
   if not parent.isNil:
     let newCtx = createMethodCallContext(
       context, parent, dnu.msg, dnu.args)
     thisCtx.exec.setActiveContext newCtx
 
-defineMessage(cxLobbyContext, "doesNotUnderstand:") do (msg):
+defineMessage(cxMethodContext, "doesNotUnderstand:") do (msg):
   ## here I have to create a new context to call dnu.msg OR "doesNotUnderstand:"
   ## sending it to my parent context
   ## 
@@ -233,7 +268,7 @@ defineMessage(cxLobbyContext, "doesNotUnderstand:") do (msg):
   let newCtx = createMethodCallContext(
     context, obj_lobby, dnu.msg, dnu.args)
 
-  self.printComponents
+  #self.printComponents
   self.dataPtr(Context).exec.setActiveContext newCtx
 
 
@@ -280,7 +315,9 @@ proc createBlockContext (blck, caller:Object): Object =
   ctx.ip = bl.ipStart
   ctx.highIP = bl.ipEnd
   ctx.instrs = bl.meth
-  ctx.parent = bl.lexicalParent
+  let bp = result.dataPtr(BlockContext)
+  bp.lexicalParent = bl.lexicalParent
+  bp.owningBlock = blck
   #blck.printComponents
 
 
@@ -341,9 +378,36 @@ let
   aggxAggregateType* = aggregate(cxAggregateType, cxObj)
 cxAggregateType.aggr = aggxAggregateType
 
+
+import streams
+
+let
+  cxStream* = typeComponent(Stream)
+  aggxStream* = aggregate(cxStream, cxObj)
+cxStream.aggr = aggxStream
+
+defineMessage(cxStream, "print:") do (str):
+  this.dataVar(Stream).write(str.asString[])
+
+
+template newStream (s:Stream): Object =
+  var o = aggxStream.instantiate
+  o.dataVar(Stream) = s
+  o
+let
+  xStdout* = newStream(newFilestream(stdout))
+  xStderr* = newStream(newFilestream(stderr))
+
+defineMessage(cxObj, "printValue") do:
+  self.printComponents
+  discard xStdout.send("print:", self.send("print"))
+  self
+
+
+
 let
   componentDict = obj_lobby.ty.instantiate
-discard obj_lobby.send("at:put:", asObject("Components"), componentDict)
+
 
 proc registerComponent (co: Component) =
   if not co.isNil:
@@ -357,3 +421,11 @@ for component in cmodel.knownStaticComponents():
   registerComponent component
 for component in [cxTrue, cxFalse, cxObj, cxUndef, cxOpenNullarySender, cxBlockContext]:
   registerComponent component
+
+for k,v in items({
+            "Components": componentDict,
+            "stdout": xStdout,
+            "stderr": xStderr,
+          }):
+  discard obj_lobby.send(
+    "at:put:", asObject(k), v)
