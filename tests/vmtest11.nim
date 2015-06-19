@@ -53,6 +53,21 @@ do (msg,blck):
   this.dataVar(Component).rawDefine m, result
 
 
+defineMessage(cxObj, "findMessage:") do (name):
+  let namestr = name.asString
+  if namestr.isNil: return
+  let (bc,m) = self.findMessage(namestr[])
+  if not m.isNil: return m
+
+defineMessage(cxPrimitiveMessage, "code") do:
+  let cm = this.dataPtr(PrimitiveMessage)
+  if cm.code.isNil: return asObject("code is nil?")
+  return asObject(cm.code)
+# defineMessage(cxAST, "code") do:
+#   let ast = this.dataPtr(Node)
+#   if ast.isNil or ast[].isNil: return asObject("nil AST?")
+#   return asObject($ ast[])
+
 defineMessage(cxObj, "print") do:
   asObject("($#)".format(self.safeType.printComponentNames(", ")))
 
@@ -76,16 +91,15 @@ defineMessage(cxMethodContext, "retry") do:
   let ctx = self.dataPtr(Context)
   if not ctx.isNil:
     ctx.ip = 0
+    discard self.dataPtr(Stack).pop
+    #echo self.dataPtr(Stack).repr
 defineMessage(cxBlockContext, "retry") do:
   let bc = this.dataPtr(BlockContext)
   let ctx = self.dataPtr(Context)
   assert(not ctx.isNil)
   ctx.ip = bc.owningBlock.dataPtr(Block).ipStart
 
-
-proc main =
-  block:
-    assert isSome execute("""
+assert isSome execute("""
 
 
 Components True define: 'print' as: [
@@ -158,6 +172,10 @@ Components Int define: 'factorial' as: [
 ]
 
 """)
+
+proc main =
+  block:
+    
     echo "----------------------"
 
     # var o = execute("Lobby retry")
@@ -175,10 +193,15 @@ Components Int define: 'factorial' as: [
     discard "[x| x: 0. [x < 2] whileTrue: [x: x + 1]. ^x. 2] value"
     let ss = "[x| x: 0. [x < 2] whileTrue: [x: x + 1]. x printValue] value"
 
-    let o = execute(
-      ss).unsafeget
-      #"").unsafeget#, do_between = print_backtrace).unsafeget
-    #"[x| x:1. x<2 ifTrue: [^true]. ^false] value")
+    # let o = execute(
+    #   ss).unsafeget
+    #   #"").unsafeget#, do_between = print_backtrace).unsafeget
+    # #"[x| x:1. x<2 ifTrue: [^true]. ^false] value")
+    # o.printcomponents
+    # echo o.send("print").asString[]
+
+    let ss2 = "5 factorial"
+    let o = execute(ss2).unsafeget
     o.printcomponents
     echo o.send("print").asString[]
 

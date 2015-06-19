@@ -19,7 +19,7 @@ var
   cxUndef* = slotsComponent("Undef")
 
 cmodel.aggxUndef = aggregate(cxUndef, cxObj)
-
+assert obj_true.safeType.findComponentIndex(cxFalse) == -1
 
 
 type
@@ -201,14 +201,15 @@ proc initCompiledMethod* (name:string; bytecode:seq[byte]; args,locals:openarray
 type
   PrimitiveCB = proc(context: Object; this: BoundComponent): Object{.nimcall.}
 
-  PrimitiveMethod* = object
+  PrimitiveMessage* = object
     fn*: PrimitiveCB
     code*,name*: string
 
 let 
-  cxPrimitiveMethod* = typeComponent(PrimitiveMethod)
-  aggxPrimitiveMethod* = aggregate(cxPrimitiveMethod, cxCompiledMethod, cxObj)
-cxPrimitiveMethod.aggr = aggxPrimitiveMethod
+  cxPrimitiveMessage* = typeComponent(PrimitiveMessage)
+  aggxPrimitiveMessage* = aggregate(
+    cxPrimitiveMessage, cxCompiledMethod, cxObj)
+cxPrimitiveMessage.aggr = aggxPrimitiveMessage
 
 
 
@@ -457,10 +458,9 @@ proc done* (i: var InstrBuilder): seq[byte] =
 
 
 proc newPrimitiveMessage* (args:openarray[string]; name,src:string; fn:PrimitiveCB): Object =
-  result = aggxPrimitiveMethod.instantiate
-  result.dataPtr(PrimitiveMethod).fn = fn
-  result.dataPtr(PrimitiveMethod).code = src
-  result.dataPtr(PrimitiveMethod).name = name
+  result = aggxPrimitiveMessage.instantiate
+  result.dataPtr(PrimitiveMessage).fn = fn
+  result.dataPtr(PrimitiveMessage).code = src
   var ibuilder = initInstrBuilder()
   ibuilder.execPrimitive
   let cm = result.dataPtr(CompiledMethod)
@@ -591,6 +591,7 @@ proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
     cxBoundComponent, 
     cxStack, cxContext
   )
+  proc `$` (c:Component):string=c.name
   result.dataVar(Context).highIP = cm.bytecode.high
   result.dataVar(Context).instrs = compiledMethod
   #result.dataVar(Context).parent = obj_lobby
@@ -725,7 +726,7 @@ proc tick* (self: Object) =
     wdd: echo "Leaving context - finished"
 
     let val = thisStack.pop
-    let next = exe.activeContext.dataPtr(Context).caller
+    let next = activeContext.dataPtr(Context).caller
 
     if next.isNil or next.dataPtr(Context).exec != self:
       exe.result = val
@@ -795,33 +796,50 @@ proc tick* (self: Object) =
       result = ctx
       while true:
         echo ".", result.dataPtr(Context).instrs.dataPtr(CompiledMethod).name
-        var bc = result.dataPtr(BlockContext)
-        if bc.isNil or bc.lexicalParent.isNil: 
-          assert(result.safeType.findComponentIndex(cxMethodContext) != -1)
-          break
-        result = bc.lexicalParent
-        # if result.safeType.findComponentIndex(cxMethodContext) != -1:
-        #   return
+        echo " ", result.dataPtr(Context).ip, " ($#)" % result.safetype.printComponentNames(",")
+        echo "  ",result.safeType.findComponentIndex(cxMethodContext)
+        proc `$` (co:Component): string = co.name
+        echo result.safeType.components
+        if result.safeType.findComponentIndex(cxMethodContext) != -1:
+          echo " this is a MethodContext"
+          return result
+        result = result.dataPtr(BlockContext).lexicalParent
+
+        # var bc = result.dataPtr(BlockContext)
+        # if bc.isNil or bc.lexicalParent.isNil: 
+        #   assert(result.safeType.findComponentIndex(cxMethodContext) != -1)
+        #   break
+        # result = bc.lexicalParent
+        # # if result.safeType.findComponentIndex(cxMethodContext) != -1:
+        # #   return
 
       # var par = ctx.dataPtr(Context).parent
       # while not par.isNil:
       #   result = par
       #   par = result.dataPtr(Context).parent
     let next = methodOwner activeContext
+    let caller = next.dataPtr(Context).caller
 
     assert next.dataPtr(Context).exec == self
-    assert next.dataPtr(Context).caller != nil
-    let caller = next.dataPtr(Context).caller
+    assert caller != nil
+    assert caller != activeContext
+    # let caller = next.dataPtr(Context).caller
+    # assert caller.dataPtr(Context).exec == self
 
     # echo "^ return ", obj.safeType.printComponentNames()," to ", 
     #   next.dataPtr(Context).instrs.dataPtr(CompiledMethod).name
+    
+    # caller.dataPtr(Stack).push(obj)
+    # self.setActiveContext(caller)
     caller.dataPtr(Stack).push(obj)
+    #next.dataPtr(Context).ip = next.dataPtr(Context).highIP+1
     self.setActiveContext(caller)
+
 
   of Instr.ExecPrimitive:
     idx += 1
     # execute the primitive attached to the currently running context
-    let pm = thisContext.instrs.dataPtr(PrimitiveMethod)
+    let pm = thisContext.instrs.dataPtr(PrimitiveMessage)
     when ShowInstruction:
       echo "  ExecPrimitive($#)".format(pm.name)
     if not pm.isNil:
@@ -990,6 +1008,7 @@ proc tick* (self: Object) =
       # TODO replace with exception ? 
       echo "doesNotUnderstand missing! fail execution. haha."
       echo "  msg was ", str
+      echo "  recv was ", recv.send("print").dataPtr(string)[]
     self.setActiveContext ctx
 
   else:
@@ -1087,9 +1106,9 @@ defPrimitiveComponent(String, string)
 
 
 
-# defineMessage(cxInt, "*") do (other):
-#   let other_int = other.dataVar(int)
-#   result = asObject(this.dataVar(int) + other_int)
+defineMessage(cxInt, "*") do (other):
+  let other_int = other.dataVar(int)
+  result = asObject(this.dataVar(int) * other_int)
 defineMessage(cxInt, "+") do (other):
   let other_int = other.dataVar(int)
   result = asObject(this.asVar(int) + other_int)

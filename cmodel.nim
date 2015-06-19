@@ -134,7 +134,7 @@ proc genDecrefStmts (ty:NimNode, data:NimNode): NimNode {.compileTime.} =
     let subt = ty[1]
     return genDecrefStmts(subt, data)
 
-  of ntyCstring:
+  of ntyCstring, ntyPtr:
     discard 
 
   else:
@@ -237,10 +237,14 @@ proc aggregate* (cos: varargs[Component]): AggregateType =
   result.bytes = bytes
 
 proc rfind* (a: seq, b: any): int {.inline.}=
-  result = high(a)
-  while result > low(a):
-    if a[result] == b: return
-    dec result
+  # result = high(a)
+  # while result > low(a):
+  #   if a[result] == b: return
+  #   dec result
+  # result = -1
+  for i in countdown(high(a), low(a)):
+    if a[i] == b: return i
+  return -1
 
 proc findComponentIndex* (ty: AggregateType; co: Component): int =
   proc `==` (a: (int,Component), b: Component): bool =
