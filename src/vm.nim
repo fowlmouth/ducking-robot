@@ -164,9 +164,8 @@ proc findMessage* (obj:Object; msg:string): (BoundComponent,Object) =
 
 
 
-
 let 
-  cxBoundComponent* = typeComponent(BoundComponent)
+  cxBoundComponent = typeComponent(BoundComponent)
 
 type
   Block* = object
@@ -841,7 +840,7 @@ proc tick* (self: Object) =
     # execute the primitive attached to the currently running context
     let pm = thisContext.instrs.dataPtr(PrimitiveMessage)
     when ShowInstruction:
-      echo "  ExecPrimitive($#)".format(pm.name)
+      echo "  ExecPrimitive($#)".format(thisContext.instrs.dataPtr(CompiledMethod).name)
     if not pm.isNil:
       let bc = activeContext.dataPtr(BoundComponent)
       if bc.isNil:
@@ -1120,6 +1119,13 @@ defineMessage(cxInt, "<") do (other):
       obj_true
     else:
       obj_false
+defineMessage(cxInt, ">") do (other):
+  return if this.dataVar(int) > other.dataVar(int): obj_true else: obj_false
+defineMessage(cxInt, "<=") do (other):
+  return if this.dataVar(int) <= other.dataVar(int): obj_true else: obj_false
+defineMessage(cxInt, ">=") do (other):
+  return if this.dataVar(int) >= other.dataVar(int): obj_true else: obj_false
+
 
 defineMessage(cxInt, "print") do:
   result = asObject($ this.asVar(int))

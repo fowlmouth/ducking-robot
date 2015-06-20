@@ -2,7 +2,7 @@
 import cmodel, vm
 export cmodel, vm
 
-
+import tables
 
 
 
@@ -243,7 +243,6 @@ proc execute* (expresion:string; do_between:proc(exe:Object)): Option[Object] =
   result = some exe.result
 
 
-#let cxBlockContext = slotsComponent("BlockContext")
 
 defineMessage(cxBlockContext, "doesNotUnderstand:") do (msg):
   ## here I have to create a new context to call dnu.msg OR "doesNotUnderstand:"
@@ -321,14 +320,32 @@ proc createBlockContext (blck, caller:Object): Object =
   #blck.printComponents
 
 
-defineMessage(cxBlock, "value") do:
-  let ctx = createBlockContext(self, context)
-  # let ctx = createContext(msg, bc)
-  if ctx.isNil: 
-    echo "!! failed to create block context"
-    return nil
+defineMessage(cxBlock, "instantiate") do:
+  let ctx = createBlockContext(self, context.dataPtr(Context).caller)
+  return ctx
 
+defineMessage(cxBlockContext, "caller:") do (ctx):
+  self.dataPtr(Context).caller = ctx
+
+defineMessage(cxBlockContext, "activate") do:
+  context.dataPtr(Context).exec.setActiveContext(self)
+
+defineMessage(cxBlock, "activateOn:") do (caller):
+  let ctx = createBlockContext(self, context)
   context.dataPtr(Context).exec.setActiveContext(ctx)
+
+
+# defineMessage(cxBlock, "value") do:
+#   let ctx = createBlockContext(self, context)
+#   # let ctx = createContext(msg, bc)
+#   if ctx.isNil: 
+#     echo "!! failed to create block context"
+#     return nil
+
+#   context.dataPtr(Context).exec.setActiveContext(ctx)
+
+
+defPrimitiveComponent(BoundComponent, BoundComponent)
 
 defineMessage(cxBoundComponent, "self") do: 
   return this.dataPtr(BoundComponent).self
@@ -367,16 +384,33 @@ obj_lobby = aggregate(cxOpenNullarySender, cxStrTab, cxObj).instantiate
 discard obj_lobby.send("at:put:", asObject("Lobby"), obj_lobby)
 
 
+defPrimitiveComponent(Component, Component)
+# let
+#   cxComponent* = typeComponent(Component)
+#   aggxComponent* = aggregate(cxComponent, cxObj)
+# cxComponent.aggr = aggxComponent
 
-let
-  cxComponent* = typeComponent(Component)
-  aggxComponent* = aggregate(cxComponent, cxObj)
-cxComponent.aggr = aggxComponent
+defPrimitiveComponent(AggregateType, AggregateType)
+# let
+#   cxAggregateType* = typeComponent(AggregateType)
+#   aggxAggregateType* = aggregate(cxAggregateType, cxObj)
+# cxAggregateType.aggr = aggxAggregateType
 
-let
-  cxAggregateType* = typeComponent(AggregateType)
-  aggxAggregateType* = aggregate(cxAggregateType, cxObj)
-cxAggregateType.aggr = aggxAggregateType
+defineMessage(cxComponent, "defaultAggregateType")
+do: this.dataVar(Component).aggr.asObject
+
+
+type Array* = object
+  elems*: seq[Object]
+proc len* (some:Array): int = some.elems.len
+
+defPrimitiveComponent(Array, Array)
+
+defineMessage(cxArray, "len") do: 
+  asObject(this.dataVar(Array).len)
+
+
+
 
 
 import streams
@@ -408,6 +442,8 @@ defineMessage(cxObj, "printValue") do:
 let
   componentDict = obj_lobby.ty.instantiate
 
+proc getComponentComponent* (name:string): Object =
+  componentDict.dataVar(StrTab)[name]
 
 proc registerComponent (co: Component) =
   if not co.isNil:
@@ -417,9 +453,17 @@ proc registerComponent (co: Component) =
       "at:put:", asObject(co.name), obj)
     echo "### defined ", co.name
 
-for component in cmodel.knownStaticComponents():
-  registerComponent component
-for component in [cxTrue, cxFalse, cxObj, cxUndef, cxOpenNullarySender, cxBlockContext]:
+proc registerNewStaticComponents* =
+  var start{.global.} = 1
+  echo "### starting from ", start
+  for co in cmodel.staticComponentsFrom(start):
+    registerComponent co
+  start = cmodel.nextStaticID()
+
+registerNewStaticComponents()
+# for component in cmodel.knownStaticComponents():
+#   registerComponent component
+for component in [cxTrue, cxFalse, cxObj, cxUndef, cxOpenNullarySender, cxBlockContext, cxMethodContext]:
   registerComponent component
 
 for k,v in items({
@@ -429,3 +473,148 @@ for k,v in items({
           }):
   discard obj_lobby.send(
     "at:put:", asObject(k), v)
+
+
+
+defineMessage(cxComponent, "define:as:") 
+do (msg,blck):
+  let pBlock = blck.dataPtr(Block)
+  assert(not pBlock.isNil)
+
+  # define a CompiledMethod out of the bytecode for this blck
+  let method_owner = pBlock.meth
+  let len = pBlock.ipEnd - pBlock.ipStart + 1
+  let ipSource =
+    cast[ptr UncheckedArray[char]](
+      method_owner.dataPtr(CompiledMethod).bytecode[0].addr
+    )
+  var iseq = newSeq[byte](len)
+  copyMem iseq[0].addr, ipSource + pBlock.ipStart, len
+
+  # copy out args and locals
+  # TODO this sucks, but this only has to happen one other place thats 
+  # at block instantiation (stdobj.createBlockContext)
+  # instead when a method is created it should include contexts for sub-blocks
+  var locals = [
+    newSeq[string](pBlock.nargs),
+    newSeq[string](pBlock.nlocals)
+  ]
+  let locals_ip = ipSource + pBlock.argNamesAt
+  var tab_id, arg_idx = 0
+  if pBlock.nargs == 0: tab_id += 1
+  var cur = ""
+  for i in 0 .. < pBlock.argNamesBytes:
+    let c = locals_ip[i]
+    if c == '\00':
+      arg_idx += 1
+      if arg_idx > locals[tab_id].high:
+        tab_id += 1
+        arg_idx = 0
+
+    else:
+      #echo tab_id,":",arg_idx, "  ", pBlock.nargs, ",",pBlock.nlocals
+      locals[tab_id][arg_idx].safeAdd(c)
+
+  let m = msg.asString[]
+  result = aggxCompiledMethod.instantiate
+  result.dataVar(CompiledMethod) = 
+    initCompiledMethod(
+      this.dataVar(Component).name & "#" & m,
+      iseq,
+      args = locals[0],
+      locals = locals[1])
+
+  this.dataVar(Component).rawDefine m, result
+
+
+defineMessage(cxObj, "findMessage:") do (name):
+  let namestr = name.asString
+  if namestr.isNil: return
+  let (bc,m) = self.findMessage(namestr[])
+  if not m.isNil: return m
+
+defineMessage(cxObj, "findComponent:") do (name):
+  let n = name.asString
+  if n.isNil: return
+  result = self.findComponent(n[]).asObject
+defineMessage(cxBoundComponent, "setSlot:to:") do (name,val):
+  let n = name.asString
+  if n.isNil: return
+  let bc = this.dataPtr(BoundComponent)
+  if not bc[].isValid or bc.comp.kind == ComponentKind.Static: return
+  let idx = bc.comp.slots.find(n[])
+  if idx == -1: return
+  this.dataVar(BoundComponent).slotVar(idx) = val
+  result = val
+
+defineMessage(cxPrimitiveMessage, "code") do:
+  let cm = this.dataPtr(PrimitiveMessage)
+  if cm.code.isNil: return asObject("code is nil?")
+  let code = cm.code.replace("\L")
+  return asObject(cm.code)
+# defineMessage(cxAST, "code") do:
+#   let ast = this.dataPtr(Node)
+#   if ast.isNil or ast[].isNil: return asObject("nil AST?")
+#   return asObject($ ast[])
+
+defineMessage(cxObj, "print") do:
+  asObject("($#)".format(self.safeType.printComponentNames(", ")))
+
+defineMessage(cxObj, "numComponents") do:
+  asObject(self.safeType.components.len)
+
+
+defineMessage(cxContext, "setIP:") do (ip):
+  echo "ip = ", self.dataPtr(Context).ip
+  echo ip.safeType.printcomponentnames
+  this.dataPtr(Context).ip = ip.dataVar(int)
+  echo " now ip =  ", ip.dataVar(int)
+
+defineMessage(cxBlockContext, "firstIP") do:
+  let owner = this.dataPtr(BlockContext).owningBlock
+  result = owner.dataPtr(Block).ipStart.asObject
+defineMessage(cxMethodContext, "firstIP") do:
+  asObject(0)
+
+defineMessage(cxContext, "highIP") do:
+  result = this.dataPtr(Context).highIP.asObject
+
+
+defineMessage(cxMethodContext, "retry") do:
+  let ctx = self.dataPtr(Context)
+  if not ctx.isNil:
+    ctx.ip = 0
+    discard self.dataPtr(Stack).pop
+    #echo self.dataPtr(Stack).repr
+defineMessage(cxBlockContext, "retry") do:
+  let bc = this.dataPtr(BlockContext)
+  let ctx = self.dataPtr(Context)
+  assert(not ctx.isNil)
+  ctx.ip = bc.owningBlock.dataPtr(Block).ipStart
+
+proc defMetaComponent* (componentName:string): Component =
+  let o = getComponentComponent(componentName)
+  result = slotsComponent(componentName&"-ClassBehavior")
+  assert o.addBehavior(result)
+
+
+block:
+  let CoClsBehav = defMetaComponent("Component")
+  defineMessage(CoClsBehav, "newBehavior:") do(name):
+    slotsComponent(name.asString[]).asObject
+  defineMessage(CoClsBehav, "withSlots:") do(name, slotsArr):
+    let arr = slotsArr.asArray
+    if arr.isNil: return
+
+    var slots: seq[string] = @[]
+    for itm in arr.elems:
+      let s = itm.asString
+      if s.isNil: continue
+
+      slots.add s[]
+
+    result = slotsComponent(name.asString[], slots).asObject
+
+
+
+assert isSome execute(readFile("lib/std.ft"))

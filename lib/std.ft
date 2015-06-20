@@ -1,0 +1,109 @@
+
+Components True define: 'print' as: [
+  'true'
+].
+Components False define: 'print' as: [
+  'false'
+].
+Components Undef define: 'print' as: [
+  'nil'
+].
+
+
+
+Components True define: 'ifTrue:' as: [:block|
+  block value
+].
+Components False define: 'ifTrue:' as: [:block|
+  nil
+].
+Components Undef define: 'ifTrue:' as: [:block|
+  nil
+].
+
+Components True define: 'ifTrue:else:' as: [:trueBlock :falseBlock|
+  trueBlock value
+].
+Components False define: 'ifTrue:else:' as: [:trueBlock :falseBlock|
+  falseBlock value
+].
+Components Undef define: 'ifTrue:else:' as: [:trueBlock :falseBlock|
+  falseBlock value
+].
+
+
+
+
+Components True define: 'ifFalse:' as: [:block|
+  nil
+].
+Components False define: 'ifFalse:' as: [:block|
+  block value
+].
+Components Undef define: 'ifFalse:' as: [:block|
+  block value
+].
+
+
+Components Block define: 'ifTrue:' as: [:block|
+  self value ifTrue: block
+].
+Components Block define: 'ifTrue:else:' as: [:trueBlock :falseBlock|
+  self value ifTrue: trueBlock else: falseBlock
+].
+Components Block define: 'ifFalse:' as: [:block|
+  self value ifFalse: block
+].
+
+Components Block define: 'whileTrue:' as: [:block |
+  [
+    self value ifFalse: [^ nil].
+    block value
+  ] loopForever
+].
+
+Components Block define:'loopForever' as:[
+  self value.
+  thisContext retry
+].
+
+
+Components Object define: 'do:' as: [:block|
+  block value: self
+].
+Components Undef define: 'do:' as: [:block|
+  nil
+].
+
+
+Components Int define: 'to:do:' as: [:max :block i|
+  self > max ifTrue: [^nil].
+  i: self.
+  [i <= max] whileTrue: [block value: i. i: i+1].
+  nil
+].
+
+
+Components Block define:'value' as:[
+  self activateOn: thisContext
+].
+
+Components BlockContext define:'take:argFrom:' as:[:n :boundComp dest|
+  dest: (self findComponent: 'Locals').
+  1 to: n do: [:n|
+    n: n-1.
+    dest setSlot: n to: (boundComp getSlot: n)
+  ].
+  nil
+].
+
+Components Block define:'value:' as:[:val ctx|
+  ctx: self instantiate.
+  ctx caller: thisContext.
+  ctx take: 1 argFrom: (thisContext findComponent: 'Locals')
+  ctx activate
+]
+
+
+
+

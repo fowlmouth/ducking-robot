@@ -208,6 +208,14 @@ grammar(Node):
   stmt_separator :=
     ?ws and chr('.') and ?ws
 
+  lbrace := chr({'{'})
+  rbrace := chr({'}'})
+  array_literal :=
+    (lbrace and ?ws and rbrace).save((start:cstring,len:int)->Node=> Node(kind: NK.Array, sub: @[])) or
+    (lbrace and ?ws and 
+      expr_keyword.join(stmt_separator) and 
+      ?ws and rbrace).save((ns:seq[Node])->Node => Node(kind:NK.Array, sub:ns))
+
   argument := colon and ident
   anyChar := chr({char.low .. char.high})
   proc saveArrBlank (r:Rule[Node]):Rule[Node] =
@@ -219,12 +227,6 @@ grammar(Node):
     ?ws and
     (ident.join(ws) or anyChar.present).saveArrBlank and
     chr('|')
-
-
-    # ( colon and ?ws and ident.join(?ws) and ?ws and chr('|') and ?ws
-    # ).repeat(0,1)
-    # .save((ns:seq[Node])->Node=> Node(kind:NK.Array, sub:ns))
-    # .save((start:cstring,len:int)->Node=> Node(kind:NK.Array, sub: @[]))
 
   block_literal :=
     ( chr('[') and ?ws and ?(arg_list and ?ws) and
@@ -260,6 +262,7 @@ grammar(Node):
     (literal_int and absent(chr({'A'..'Z','a'..'z'}))) or 
     literal_str or
     block_literal or
+    array_literal or
     reserved_identifier or
     parens(?ws and expr_keyword and ?ws)
   expr_unary :=

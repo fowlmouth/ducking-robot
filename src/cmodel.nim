@@ -72,8 +72,13 @@ type
 var data_type_counter{.global.} = 1
 var staticComponents{.global.}: seq[Component] = @[]
 
+proc nextStaticID* : int = data_type_counter
+
 iterator knownStaticComponents* : Component = 
   for i in 1 .. high(staticComponents):
+    yield staticComponents[i]
+iterator staticComponentsFrom* (start:int): Component =
+  for i in start .. high(staticComponents):
     yield staticComponents[i]
 
 proc castTo (fro,to:NimNode): NimNode {.compileTime.}=
@@ -288,8 +293,8 @@ proc simpleRepr* (obj: Object): string =
 
 when defined(Debug):
   var objBeingFreed* = proc(o:Object) = 
-    echo "Object free'd: 0x",strutils.tohex(cast[int](obj), sizeof(pointer)*2)
-    echo "  (", printComponentNames(obj.ty), ")"
+    echo "Object free'd: 0x",strutils.tohex(cast[int](o), sizeof(pointer)*2)
+    echo "  (", printComponentNames(o.ty), ")"
 proc freeObject* (obj: Object) =
   #obj.sendMessage("beingFreed")
   when defined(Debug):
@@ -414,7 +419,7 @@ proc addBehavior* (ty:AggregateType; behav:Component): bool =
   result = behav.isBehavior
   if not result: return false
 
-  ty.components.add((0,behav))
+  ty.components.add((-1,behav))
 
 proc addBehavior* (obj:Object; behav:Component): bool =
   ## derive a new aggregate type for obj with behav added. 
