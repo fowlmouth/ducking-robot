@@ -467,5 +467,24 @@ proc insertBehavior* (ty:AggregateType; behavior:Component; index:Natural): bool
 
 
 
+proc mutate* (some:AggregateType; before,after,drop:openarray[Component] = []): AggregateType =
+  # ty = aggregate(ty1, ty2)
+  # ty = ty.mutate(
+  #       before = [ty3], 
+  #       after = [ty4], 
+  #       drop = [ty2])
+  #  # => aggregate(ty3, ty1, ty4)
+  var comps = newSeq[Component]()
+  for c in before:
+    comps.add c
+
+  for offs,c in some.components.items:
+    if c notIn drop: 
+      comps.add c
+
+  for c in after: 
+    comps.add c
+
+  result = aggregate comps
 
 

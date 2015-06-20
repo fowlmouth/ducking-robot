@@ -88,22 +88,34 @@ Components Block define:'value' as:[
   self activateOn: thisContext
 ].
 
-Components BlockContext define:'take:argFrom:' as:[:n :boundComp dest|
+"
+Components BlockContext define:'take:argsFrom:' as: [ :n :boundComp dest i|
   dest: (self findComponent: 'Locals').
-  1 to: n do: [:n|
-    n: n-1.
-    dest setSlot: n to: (boundComp getSlot: n)
+  n: n-1.
+  i: 0.
+  [i <= n] whileTrue: [
+    dest setSlot: i to: (boundComp getSlot: i).
+    i: i+1.
   ].
   nil
 ].
+"
 
-Components Block define:'value:' as:[:val ctx|
+Components Block define:'value:' as: [:val ctx dest|
   ctx: self instantiate.
   ctx caller: thisContext.
-  ctx take: 1 argFrom: (thisContext findComponent: 'Locals')
+  dest: (ctx findComponent: 'Locals').
+  dest setSlot: 0 to: val.
+  ctx activate
+].
+
+Components Block define:'value:value:' as: [:val1 :val2 ctx dest|
+  ctx: self instantiate.
+  ctx caller: thisContext.
+  dest: (ctx findComponent: 'Locals').
+  dest setSlot: 0 to: val1.
+  dest setSlot: 1 to: val2.
   ctx activate
 ]
-
-
 
 

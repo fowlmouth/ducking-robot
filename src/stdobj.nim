@@ -195,6 +195,9 @@ proc compileExpressions* (str:string): Option[Object] =
   ##
   parseExpressions(str) >>= compileNode
 
+proc newAnonObj* : Object =
+  aggregate(cxObj).instantiate
+
 proc executeMethodAnony* (meth:Object): Option[Object] =
   let 
     ctx = 
@@ -252,6 +255,9 @@ defineMessage(cxBlockContext, "doesNotUnderstand:") do (msg):
   let thisCtx = self.dataPtr(Context)
   let parent = this.dataPtr(BlockContext).lexicalParent
 
+  proc `$` (s:Object):string = simpleRepr(s)
+  #echo msg.dataVar(DNU)
+
   if not parent.isNil:
     let newCtx = createMethodCallContext(
       context, parent, dnu.msg, dnu.args)
@@ -307,7 +313,8 @@ proc createBlockContext (blck, caller:Object): Object =
   let cxLocals = slotsComponent("Locals", locals)
   result = instantiate aggregate(
     cxLocals, cxBlockContext,
-    cxStack, cxContext
+    cxStack, cxContext,
+    cxObj
   )
   let ctx = result.dataPtr(Context)
   ctx.caller = caller
@@ -321,7 +328,7 @@ proc createBlockContext (blck, caller:Object): Object =
 
 
 defineMessage(cxBlock, "instantiate") do:
-  let ctx = createBlockContext(self, context.dataPtr(Context).caller)
+  let ctx = createBlockContext(self, nil)
   return ctx
 
 defineMessage(cxBlockContext, "caller:") do (ctx):
@@ -537,15 +544,21 @@ defineMessage(cxObj, "findComponent:") do (name):
   let n = name.asString
   if n.isNil: return
   result = self.findComponent(n[]).asObject
-defineMessage(cxBoundComponent, "setSlot:to:") do (name,val):
-  let n = name.asString
-  if n.isNil: return
+defineMessage(cxBoundComponent, "setSlot:to:") do (idx,val):
+  let i = idx.asInt
+  if i.isNil: return
   let bc = this.dataPtr(BoundComponent)
   if not bc[].isValid or bc.comp.kind == ComponentKind.Static: return
-  let idx = bc.comp.slots.find(n[])
-  if idx == -1: return
-  this.dataVar(BoundComponent).slotVar(idx) = val
+  # let idx = bc.comp.slots.find(n[])
+  # if idx == -1: return
+  bc[].slotVar(i[]) = val
   result = val
+defineMessage(cxBoundComponent, "getSlot:") do (idx):
+  let i = idx.asInt
+  if i.isNil: return
+  let bc = this.dataPtr(BoundComponent)
+  if not bc[].isValid or bc.comp.kind == ComponentKind.Static: return
+  result = bc[].slotVar(i[])
 
 defineMessage(cxPrimitiveMessage, "code") do:
   let cm = this.dataPtr(PrimitiveMessage)

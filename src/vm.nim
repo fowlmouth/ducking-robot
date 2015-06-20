@@ -588,7 +588,8 @@ proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
     cm.contextCreator, 
     cxMethodContext,
     cxBoundComponent, 
-    cxStack, cxContext
+    cxStack, cxContext,
+    cxObj
   )
   proc `$` (c:Component):string=c.name
   result.dataVar(Context).highIP = cm.bytecode.high
@@ -640,6 +641,9 @@ proc ptrToBytecode* (some: ptr Exec): ptr UncheckedArray[byte] =
   )
 
 proc setActiveContext* (someExec, ctx: Object) =
+  if someExec.isNil:
+    printComponents ctx
+
   assert(not someExec.isNil)
   someExec.dataVar(Exec).activeContext = ctx
   if not ctx.isNIL:
@@ -691,6 +695,9 @@ proc createMethodCallContext* (caller, recv:Object; msgName:string; args:seq[Obj
     let (bc,msg) = recv.findMessage("doesNotUnderstand:")
     if msg.isNil:
       return
+
+    when ShowInstruction:
+      echo " dnu obj: $# msg: $#".format(recv.simpleRepr, msgName)
 
     result = createContext(msg,bc)
     # TODO ctx.ty.components should be reordered
@@ -862,7 +869,7 @@ proc tick* (self: Object) =
     idx += 1
     let slot = iset[idx]
     when ShowInstruction:
-      echo "GetSlot(", slot, ")"
+      echo "        ", slot
     idx += 1
     let bm = activeContext.dataPtr(BoundComponent)
 
@@ -1005,6 +1012,7 @@ proc tick* (self: Object) =
       activeContext, recv, str, args )
     if ctx.isNil:
       # TODO replace with exception ? 
+      recv.printComponents
       echo "doesNotUnderstand missing! fail execution. haha."
       echo "  msg was ", str
       echo "  recv was ", recv.send("print").dataPtr(string)[]
