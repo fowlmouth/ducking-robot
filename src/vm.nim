@@ -136,23 +136,25 @@ import tables
 
 proc findMessage* (ty: AggregateType; msg: string; res: var MessageSearch): bool =
   
-  for i in countdown(res.continueFrom, 0, 1):
+  #for i in countdown(res.continueFrom, 0, 1):
+  for i in res.continueFrom .. <ty.numComponents:
     let 
       c = ty.components[i]
       m = c[1].messages[msg]
     if not m.isNil:
-      res.continueFrom = i-1
+      res.continueFrom = i+1
       res.msg = m #cast[MessageImpl](m)
       res.bound.comp = c[1]
       res.bound.idx = i
       result = true
       return
 
+type BoundMessage* = (BoundComponent,Object)
 
 proc findMessage* (obj:Object; msg:string): (BoundComponent,Object) =
   let ty = obj.safeType
   var ms: MessageSearch
-  ms.continueFrom = high(ty.components)
+  ms.continueFrom = 0 #high(ty.components)
   if ty.findMessage(msg, ms):
     ms.bound.self = obj
     result = (ms.bound, ms.msg)
@@ -710,6 +712,9 @@ proc newDNU* (msg:string, args:seq[Object], caller:Object): Object =
 
 
 proc createMethodCallContext* (caller, recv:Object; msgName:string; args:seq[Object]): Object =
+  ## sets up a method call context to call `msgname` on `recv`
+  ## if `msgname` isnt found then `doesNotUnderstand:` is invoked
+  ## 
   let (bc,msg) = recv.findMessage(msgName)
   if msg.isNil:
 
@@ -721,12 +726,15 @@ proc createMethodCallContext* (caller, recv:Object; msgName:string; args:seq[Obj
       echo " dnu obj: $# msg: $#".format(recv.simpleRepr, msgName)
 
     result = createContext(msg,bc)
-    # TODO ctx.ty.components should be reordered
-    result.getComponent(result.ty.components.high).slotVar(0) = 
-      newDNU(msgName, args, caller)
+    # # TODO ctx.ty.components should be reordered
+    # result.getComponent(result.ty.components.high).slotVar(0) = 
+    #   newDNU(msgName, args, caller)
+    result.getComponent(0).slotVar(0) = newDNU(
+      msgName, args, caller)
+
   else:
     result = createContext(msg,bc)
-    let locals = result.getComponent(result.ty.components.high)
+    let locals = result.getComponent(0)#result.ty.components.high)
     for i in 0 .. high(args):
       locals.slotVar(i) = args[i]
   

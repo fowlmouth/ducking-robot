@@ -236,35 +236,31 @@ proc aggregate* (cos: varargs[Component]): AggregateType =
   result = AggregateType(components: newSeq[(int,Component)](cos.len))
   var bytes = 0
   for i in 0 .. high(cos):
-    let c = cos[high(cos)-i]
+    let c = cos[i] #cos[high(cos)-i]
     result.components[i] = (bytes,c)
     bytes += c.bytes
   result.bytes = bytes
 
 proc rfind* (a: seq, b: any): int {.inline.}=
-  # result = high(a)
-  # while result > low(a):
-  #   if a[result] == b: return
-  #   dec result
-  # result = -1
+  result = -1
   for i in countdown(high(a), low(a)):
     if a[i] == b: return i
-  return -1
 
 proc findComponentIndex* (ty: AggregateType; co: Component): int =
   proc `==` (a: (int,Component), b: Component): bool =
     a[1] == b
-  ty.components.rfind(co)
+  ty.components.find(co)
 proc findComponentIndex* (ty: AggregateType; componentName: string): int =
   proc `==` (a: (int,Component), b: string): bool =
     a[1].name == b
-  ty.components.rfind(componentName)
+  ty.components.find(componentName)
 
 proc findComponentOffset* (ty: AggregateType; co: Component): int =
   result = ty.findComponentIndex co
   if result == -1: return
   result = ty.components[result][0]
 
+proc numComponents* (ty:AggregateType): int {.inline.} = ty.components.len
 
 
 ## Object
@@ -278,12 +274,20 @@ var
 template safeType* (obj: Object): AggregateType =
   (if obj.isNil: aggx_undef else: obj.ty)
 
+iterator eachComponent* (ty:AggregateType): Component =
+  for i in 0 .. ty.components.high:
+    yield ty.components[i][1]
+
+iterator eachComponentWithOffset* (ty:AggregateType, start:int): tuple[offs:int,comp:Component] =
+  for i in start .. ty.components.high:
+    yield ty.components[i]
 
 proc printComponentNames* (ty: AggregateType; sep = ", "): string =
   result = ""
-  for i in countdown(ty.components.high, 0, 1):
+  let H = ty.components.high
+  for i in 0 .. H:
     result.add ty.components[i][1].name
-    if i > 0:
+    if i < H:
       result.add sep
 
 proc simpleRepr* (obj: Object): string =
@@ -415,11 +419,12 @@ proc isBehavior* (co:Component): bool = co.bytes == 0
 
 proc addBehavior* (ty:AggregateType; behav:Component): bool =
   ## modify an aggregate type by adding behavior, all instances of 
-  ## the type will be affected!
+  ## the type will be affected! behavior is added to the front of 
+  ## object's behavior
   result = behav.isBehavior
   if not result: return false
 
-  ty.components.add((-1,behav))
+  ty.components.insert((-1,behav), 0)
 
 proc addBehavior* (obj:Object; behav:Component): bool =
   ## derive a new aggregate type for obj with behav added. 
@@ -428,7 +433,8 @@ proc addBehavior* (obj:Object; behav:Component): bool =
   if not result: return false
 
   let new_ty = obj.ty.dup
-  new_ty.components.add((-1,behav))
+  #new_ty.components.add((-1,behav))
+  new_ty.components.insert((-1,behav), 0)
   obj.ty = new_ty
 
 proc dropBehavior* (ty:AggregateType; behav:Component): bool =  
@@ -457,13 +463,13 @@ proc dropBehavior* (obj:Object; behav:Component): bool =
 proc insertBehavior* (ty:AggregateType; behavior:Component; index:Natural): bool=
   ## insert a behavior into a specific slot
   ## index should range from 0 .. high(ty.components)
-  ## index 0 inserts at the end of the components since dispatch looks in reverse
+  ## index 0 inserts at the begining of the component list, dispatch looks down this list
   result = behavior.isBehavior
   if not result: return
-  
+  do_assert index in 0 .. ty.components.high
   ty.components.insert(
     (-1,behavior),
-    ty.components.len - index)
+    index)
 
 
 
@@ -478,8 +484,8 @@ proc mutate* (some:AggregateType; before,after,drop:openarray[Component] = []): 
   for c in before:
     comps.add c
 
-  for offs,c in some.components.items:
-    if c notIn drop: 
+  for c in some.eachComponent:
+    if c notIn drop:
       comps.add c
 
   for c in after: 

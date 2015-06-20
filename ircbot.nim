@@ -126,7 +126,7 @@ do(msg):
 
 defineMessage(cxObj, "send:withArgs:")
 do(msg,args):
-  let arr = args.asArray
+  let arr = args.dataPtr(Array)
   if arr.isNil: return
   let newCtx = createMethodCallContext(
     context, self, msg.asString[], arr.elems)

@@ -568,7 +568,7 @@ defineMessage(cxObj, "print") do:
   asObject("($#)".format(self.safeType.printComponentNames(", ")))
 
 defineMessage(cxObj, "numComponents") do:
-  asObject(self.safeType.components.len)
+  asObject(self.safeType.numComponents)
 
 
 defineMessage(cxContext, "setIP:") do (ip):
