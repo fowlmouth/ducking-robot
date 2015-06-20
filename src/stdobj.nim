@@ -109,6 +109,11 @@ proc compileNode (builder: var InstrBuilder; node: Node) =
   of NK.String:
     builder.pushPOD node.str
 
+  of NK.Array:
+    for s in node.sub:
+      builder.compileNode(s)
+    builder.pushArray node.sub.len
+
   of NK.Message:
     # (msg recv arg0 arg1 ...)
     let msg = node.sub[0].str
@@ -407,17 +412,6 @@ defineMessage(cxComponent, "defaultAggregateType")
 do: this.dataVar(Component).aggr.asObject
 
 
-type Array* = object
-  elems*: seq[Object]
-proc len* (some:Array): int = some.elems.len
-
-defPrimitiveComponent(Array, Array)
-
-defineMessage(cxArray, "len") do: 
-  asObject(this.dataVar(Array).len)
-
-
-
 
 
 import streams
@@ -616,7 +610,7 @@ block:
   defineMessage(CoClsBehav, "newBehavior:") do(name):
     slotsComponent(name.asString[]).asObject
   defineMessage(CoClsBehav, "withSlots:") do(name, slotsArr):
-    let arr = slotsArr.asArray
+    let arr = slotsArr.dataPtr(Array)
     if arr.isNil: return
 
     var slots: seq[string] = @[]
@@ -627,6 +621,10 @@ block:
       slots.add s[]
 
     result = slotsComponent(name.asString[], slots).asObject
+
+
+defineMessage(cxArray, "len") do: 
+  asObject(this.dataVar(Array).len)
 
 
 

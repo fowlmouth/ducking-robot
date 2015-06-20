@@ -302,6 +302,7 @@ type
     PushPOD, PushBLOCK, 
     PushNIL, PushThisContext,
     PushTRUE,PushFALSE,
+    PushARRAY,
     Pop, Dup, Send, 
     GetSlot, SetSlot, ExecPrimitive, 
     Return
@@ -341,6 +342,12 @@ template addByte* (i: var InstrBuilder; b: untyped): stmt =
 template addNullBytes* (i: var InstrBuilder; n: int): stmt =
   i.iset.ensureLen i.index+n
   i.index += n
+
+proc pushArray* (i:var InstrBuilder; len: int) =
+  assert len >= 0
+  assert len < 256
+  i.addByte Instr.PushARRAY
+  i.addByte len
 
 proc pushPOD* (i: var InstrBuilder; obj: Serializable) =
   mixin serialize
@@ -665,6 +672,20 @@ const ShowInstruction =
   defined(Debug) or defined(ShowInstruction)
 
 
+
+
+type Array* = object
+  elems*: seq[Object]
+let
+  cxArray* = typeComponent(Array)
+  aggxArray* = aggregate(cxArray, cxObj)
+cxArray.aggr = aggxArray
+
+proc len* (some:Array): int = some.elems.len
+
+
+
+
 type 
   StrTab* = TableRef[string,Object]
 
@@ -758,6 +779,22 @@ proc tick* (self: Object) =
   template pop (): expr = 
     thisStack.pop
 
+
+  template readU8 (): uint8 =
+    var res = uint8(iset[idx])
+    idx += 1
+    res
+  template readU16 (): uint16 =
+    var res: uint16
+    bigEndian16(res.addr, iset[idx].addr)
+    idx += 2
+    res
+  template readU32 (): uint32 =
+    var res: uint32
+    bigEndian32(res.addr, iset[idx].addr)
+    idx += 4
+    res
+
   let iset = exe.ptrToBytecode
   var idx = thisContext.ip
 
@@ -792,6 +829,16 @@ proc tick* (self: Object) =
   of Instr.PushThisContext:
     idx += 1
     push activeContext
+
+  of Instr.PushARRAY:
+    idx += 1
+    let L = readU8().int
+    var arr = aggxArray.instantiate
+    let arrP = arr.dataPtr(Array)
+    arrP.elems.newSeq L
+    for i in 1 .. L:
+      arrP.elems[L-i] = pop()
+    push arr
 
   of Instr.Return:
     idx += 1
@@ -940,20 +987,6 @@ proc tick* (self: Object) =
 
   of Instr.PushBLOCK:
 
-    template readU8 (): uint8 =
-      var res = uint8(iset[idx])
-      idx += 1
-      res
-    template readU16 (): uint16 =
-      var res: uint16
-      bigEndian16(res.addr, iset[idx].addr)
-      idx += 2
-      res
-    template readU32 (): uint32 =
-      var res: uint32
-      bigEndian32(res.addr, iset[idx].addr)
-      idx += 4
-      res
 
     idx += 1
     let nArgs = readU8.int
