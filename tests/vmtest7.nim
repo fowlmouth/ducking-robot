@@ -1,9 +1,9 @@
 
-import stdobj
+import stdobj,vm,cmodel,options
 
 
 proc main =
-  let ob = execute("[x| x: 4. return: thisContext to: caller. x ] value")
+  let ob = execute("[x| x: 4. return: thisContext to: caller. x ] value").unsafeGet
   echo "--------"
   ob.printcomponents
 

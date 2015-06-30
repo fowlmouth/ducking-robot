@@ -1,5 +1,5 @@
 
-import stdobj,cmodel
+import stdobj,cmodel,vm
 import options,kwdgrammar
 
 
