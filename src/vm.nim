@@ -154,9 +154,6 @@ proc findComponent* (some: Object; name: string): BoundComponent {.inline.}=
     return
   result.comp = some.safeType.components[idx][1]
 
-proc isBehavior* (co:Object): bool {.inline.}=
-  co.dataSize == 0
-
 
 
 proc slotNames* (some: BoundComponent): seq[string] =
@@ -1094,6 +1091,7 @@ proc tick* (self: Object) =
       echo "doesNotUnderstand missing! fail execution. haha."
       echo "  msg was ", str
       echo "  recv was ", recv.send("print").dataPtr(string)[]
+      recv.printComponents
     self.setActiveContext ctx
 
   else:

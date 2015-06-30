@@ -141,6 +141,8 @@ proc new_component (some:typedesc): Object =
       result[MTable].entries = initTable[string,Object]()
       result[Identifier] = name(some).Identifier
 
+      echo "!! new static component (", typeID(some), ") ", name(some)
+
 proc typeComponent* (some:typedesc): Object =
   #static: echo name(some)
   result = new_component(some)
@@ -272,3 +274,17 @@ proc printComponents* (some:Object) =
     stdout.write "\n"
     stdout.flushFile
 
+iterator eachComponent* (some:Aggr): Object = 
+  for i in 0 .. high(some.components):
+    yield some.components[i].co
+
+proc mutate* (some:Aggr; before,after,drop:openarray[Object] = []): Aggr =
+  var comps = newSeq[Object]()
+  for c in before:
+    comps.add c
+  for c in some.eachComponent:
+    if c notin drop:
+      comps.add c
+  for c in after:
+    comps.add c
+  return aggregate comps

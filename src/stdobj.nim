@@ -541,7 +541,9 @@ proc registerNewStaticComponents* =
   echo "### starting from ", start
   for co in cmodel.staticComponentsFrom(start):
     registerComponent co
-  start = cmodel.nextStaticID()
+    start = co[NimDataType].nimType
+  #start = cmodel.nextStaticID()
+  echo "### ending at ", start
 
 registerNewStaticComponents()
 # for component in cmodel.knownStaticComponents():

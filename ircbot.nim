@@ -9,10 +9,11 @@ defPrimitiveComponent(IRCclient, IRCclient)
 
 registerNewStaticComponents()
 
-let cxIRCclientCls = slotsComponent("IRCclient-ClassBehavior")
+let 
+  cxIRCclientCls = slotsComponent("IRCclient-ClassBehavior")
 block:
-  let objCxIRCclient = getComponentComponent("IRCclient")
-  assert objCxIRCclient.addBehavior cxIRCclientCls
+  #let objCxIRCclient = cxIRCclient #getComponentComponent("IRCclient")
+  assert cxIRCclient.addBehavior(cxIRCclientCls)
 
 
 #defineMessage(cxIRCclientCls, "connectTo:nick:")
@@ -71,10 +72,12 @@ defineMessage(cxIRCclient, "isConnected") do:
   if this.dataPtr(IRCclient).client.isConnected: obj_true else: obj_false
 
 defineMessage(cxIRCclient, "onConnect")
-do: return
+do: 
+  discard
 
 defineMessage(cxIRCclient, "onDisconnect")
-do: return
+do:
+  echo "IRC client disconnected!"
 
 defineMessage(cxIRCclient, "onPrivMsg")
 do(msg,origin): 
@@ -133,11 +136,11 @@ do(msg,args):
   context.dataPtr(Context).exec.setActiveContext newCtx
 
 defineMessage(cxObj, "addBehavior:") do (co):
-  let cp = co.dataPtr(Component)
+  let cp = co #co.dataPtr(Component)
   assert(not cp.isNil)
-  assert(cp[].isBehavior)
+  assert(cp.isBehavior)
   assert(not self.isNil)
-  let t = self.ty.mutate(before = [cp[]])
+  let t = self.ty.mutate(before = [cp])
   self.ty = t
   return co
 
