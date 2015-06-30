@@ -1,8 +1,79 @@
 
 import cmodel, vm
-export cmodel, vm
 
-import tables
+
+defPrimitiveComponent(Int, int)
+defPrimitiveComponent(String, string)
+
+
+defineMessage(cxInt, "*") do (other):
+  let other_int = other.dataVar(int)
+  result = asObject(this.dataVar(int) * other_int)
+defineMessage(cxInt, "+") do (other):
+  let other_int = other.dataVar(int)
+  result = asObject(this.asVar(int) + other_int)
+defineMessage(cxInt, "-") do (other):
+  asObject(this.dataVar(int) - other.dataVar(int))
+defineMessage(cxInt, "<") do (other):
+  return
+    if this.dataVar(int) < other.dataVar(int):
+      obj_true
+    else:
+      obj_false
+defineMessage(cxInt, ">") do (other):
+  return if this.dataVar(int) > other.dataVar(int): obj_true else: obj_false
+defineMessage(cxInt, "<=") do (other):
+  return if this.dataVar(int) <= other.dataVar(int): obj_true else: obj_false
+defineMessage(cxInt, ">=") do (other):
+  return if this.dataVar(int) >= other.dataVar(int): obj_true else: obj_false
+
+
+defineMessage(cxInt, "print") do:
+  result = asObject($ this.asVar(int))
+
+defineMessage(cxString, "print") do: 
+  result = self
+
+defineMessage(cxObj, "asString") do:
+  result = self.send("print")
+
+
+
+
+# vm accessory types here 
+
+defineMessage(cxStack, "len") do -> Object:
+  this.dataPtr(Stack).len.asObject
+
+defineMessage(cxStack, "pop") do -> Object:
+  this.dataPtr(Stack).pop
+
+
+
+defineMessage(cxStrTab, "at:") 
+do (str):
+  wdd: echo "strtab access ", str.asString[]
+  if this.asVar(StrTab).isNil: return nil
+
+  let s = str.asString
+  if s.isNil: return nil
+
+  result = this.dataVar(StrTab)[s[]]
+
+defineMessage(cxStrTab, "at:put:") 
+do (str,val):
+  let s = str.asString
+  if s.isNil: return nil
+  if this.dataVar(StrTab).isNil:
+    this.dataVar(StrTab) = newTable[string,Object](4)
+  this.dataVar(StrTab)[s[]] = val
+
+
+
+
+
+
+
 
 
 
@@ -395,21 +466,25 @@ defineMessage(cxOpenNullarySender, "doesNotUnderstand:") do (msg):
 obj_lobby = aggregate(cxOpenNullarySender, cxStrTab, cxObj).instantiate
 discard obj_lobby.send("at:put:", asObject("Lobby"), obj_lobby)
 
-
-defPrimitiveComponent(Component, Component)
+let cxComponent* = slotsComponent("Component")
+#defPrimitiveComponent(Component, Component)
 # let
 #   cxComponent* = typeComponent(Component)
 #   aggxComponent* = aggregate(cxComponent, cxObj)
 # cxComponent.aggr = aggxComponent
 
-defPrimitiveComponent(AggregateType, AggregateType)
+assert aggxStaticComponent.insertBehavior(cxComponent, 0)
+assert aggxSlots.insertBehavior(cxComponent, 0)
+
+#defPrimitiveComponent(AggregateType, AggregateType)
+defPrimitiveComponent(AggregateType, Aggr)
 # let
 #   cxAggregateType* = typeComponent(AggregateType)
 #   aggxAggregateType* = aggregate(cxAggregateType, cxObj)
 # cxAggregateType.aggr = aggxAggregateType
 
-defineMessage(cxComponent, "defaultAggregateType")
-do: this.dataVar(Component).aggr.asObject
+# defineMessage(cxComponent, "defaultAggregateType")
+# do: this.dataVar(Component).aggr.asObject
 
 
 
@@ -419,6 +494,8 @@ import streams
 let
   cxStream* = typeComponent(Stream)
   aggxStream* = aggregate(cxStream, cxObj)
+template `aggr=` (co:Object; aggr:Aggr) =
+  stdAggr(co) = aggr
 cxStream.aggr = aggxStream
 
 defineMessage(cxStream, "print:") do (str):
@@ -434,7 +511,7 @@ let
   xStderr* = newStream(newFilestream(stderr))
 
 defineMessage(cxObj, "printValue") do:
-  self.printComponents
+  #self.printComponents
   discard xStdout.send("print:", self.send("print"))
   self
 
@@ -446,16 +523,21 @@ let
 proc getComponentComponent* (name:string): Object =
   componentDict.dataVar(StrTab)[name]
 
-proc registerComponent (co: Component) =
+proc registerComponent (co: Object) =
   if not co.isNil:
-    let obj = aggxComponent.instantiate
-    obj.dataVar(Component) = co
+    # let obj = aggxComponent.instantiate
+    # obj.dataVar(Component) = co
+    # discard componentDict.send(
+    #   "at:put:", asObject(co.name), obj)
     discard componentDict.send(
-      "at:put:", asObject(co.name), obj)
-    echo "### defined ", co.name
+      "at:put:", 
+      asObject(co[Identifier].string), 
+      co)
+
+    echo "### defined ", co[Identifier].string
 
 proc registerNewStaticComponents* =
-  var start{.global.} = 1
+  var start{.global.} = 0
   echo "### starting from ", start
   for co in cmodel.staticComponentsFrom(start):
     registerComponent co
@@ -464,7 +546,7 @@ proc registerNewStaticComponents* =
 registerNewStaticComponents()
 # for component in cmodel.knownStaticComponents():
 #   registerComponent component
-for component in [cxTrue, cxFalse, cxObj, cxUndef, cxOpenNullarySender, cxBlockContext, cxMethodContext]:
+for component in [cxTrue, cxFalse, cxObj, cxUndef, cxOpenNullarySender, cxBlockContext, cxMethodContext, cxComponent]:
   registerComponent component
 
 for k,v in items({
@@ -477,7 +559,7 @@ for k,v in items({
 
 
 
-defineMessage(cxComponent, "define:as:") 
+defineMessage(cxMtable, "define:as:") 
 do (msg,blck):
   let pBlock = blck.dataPtr(Block)
   assert(not pBlock.isNil)
@@ -520,12 +602,12 @@ do (msg,blck):
   result = aggxCompiledMethod.instantiate
   result.dataVar(CompiledMethod) = 
     initCompiledMethod(
-      this.dataVar(Component).name & "#" & m,
+      self[Identifier].string & "#" & m,
       iseq,
       args = locals[0],
       locals = locals[1])
 
-  this.dataVar(Component).rawDefine m, result
+  self.rawDefine m, result
 
 
 defineMessage(cxObj, "findMessage:") do (name):
@@ -538,20 +620,35 @@ defineMessage(cxObj, "findComponent:") do (name):
   let n = name.asString
   if n.isNil: return
   result = self.findComponent(n[]).asObject
-defineMessage(cxBoundComponent, "setSlot:to:") do (idx,val):
-  let i = idx.asInt
-  if i.isNil: return
+defineMessage(cxBoundComponent, "setSlot:to:") do (index,val):
   let bc = this.dataPtr(BoundComponent)
-  if not bc[].isValid or bc.comp.kind == ComponentKind.Static: return
-  # let idx = bc.comp.slots.find(n[])
-  # if idx == -1: return
-  bc[].slotVar(i[]) = val
+  if not bc[].isValid or not bc.comp.hasComponent(cxSlots): 
+    return
+
+  var idx = -1
+  let i = index.asInt
+  if i.isNil:
+    let n = index.asString
+    if n.isNil:
+      return
+    idx = bc.comp[Slots].names.find(n[])
+    if idx == -1: 
+      return
+
+  else:
+    idx = i[]
+    if idx notIn 0 .. bc.comp[Slots].names.high:
+      return
+
+  bc[].slotVar(idx) = val
   result = val
+
 defineMessage(cxBoundComponent, "getSlot:") do (idx):
   let i = idx.asInt
   if i.isNil: return
   let bc = this.dataPtr(BoundComponent)
-  if not bc[].isValid or bc.comp.kind == ComponentKind.Static: return
+  if not bc[].isValid or not bc.comp.hasComponent(cxSlots):
+    return
   result = bc[].slotVar(i[])
 
 defineMessage(cxPrimitiveMessage, "code") do:
@@ -599,7 +696,7 @@ defineMessage(cxBlockContext, "retry") do:
   assert(not ctx.isNil)
   ctx.ip = bc.owningBlock.dataPtr(Block).ipStart
 
-proc defMetaComponent* (componentName:string): Component =
+proc defMetaComponent* (componentName:string): Object =
   let o = getComponentComponent(componentName)
   result = slotsComponent(componentName&"-ClassBehavior")
   assert o.addBehavior(result)
@@ -608,7 +705,7 @@ proc defMetaComponent* (componentName:string): Component =
 block:
   let CoClsBehav = defMetaComponent("Component")
   defineMessage(CoClsBehav, "newBehavior:") do(name):
-    slotsComponent(name.asString[]).asObject
+    slotsComponent(name.asString[])#.asObject
   defineMessage(CoClsBehav, "withSlots:") do(name, slotsArr):
     let arr = slotsArr.dataPtr(Array)
     if arr.isNil: return
@@ -620,7 +717,7 @@ block:
 
       slots.add s[]
 
-    result = slotsComponent(name.asString[], slots).asObject
+    result = slotsComponent(name.asString[], slots)#.asObject
 
 
 defineMessage(cxArray, "len") do: 
@@ -629,3 +726,15 @@ defineMessage(cxArray, "len") do:
 
 
 assert isSome execute(readFile("lib/std.ft"))
+
+
+
+
+
+
+
+
+
+
+
+

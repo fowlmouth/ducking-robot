@@ -1,496 +1,274 @@
-## this is an component composition framework, it is a basic object model
-## founded on composition rather than inheritance. 
-##
-## changes since entoody:
-## * removed unicast/multicast messages
-##   send() sends a message to the first component that applies,
-##   multicast() is an iterator that sends a message to all components that apply
-##
-## * removed static component ordering.
-##   order matters! higher components can intercept messages before
-##   lower ordered components
-##
-## * components are geared towards behavior, nice data structs have _accessors_
-##
-## What the hell is this though?
-## * components are chunks of data and/or behavior. isolation of the two is preferred
-##   except when the data is a primitive (nim type)
-##   components can be primitive data or dynamic slotted objects
-##   their memory layout is final after creation
-## * aggregates are collections of components, new behavior is bolted on and overrides
-##   old behavior. aggregate types may not add data after they are created, this would
-##   invalidate all of their children. a way around this is shown in stdobj.nim
-## * objects are instances of aggregates, components here can be added and removed at
-##   will only require reallocation if data components are added/removed
-## 
-##  Example components:
-##    Position, Rotation, 
-##    TextureRef, 
-##    HealthPoints, Energy, MaxLifetime
-##    
-##
-##
-##
-##
-##
-
-import typetraits,tables,macros,strutils
-export macros
+import tables, typetraits, strutils
+export tables, typetraits
 
 type
-  NimDataTypeID* = int
+  Aggr* = ref object
+    instanceSize*: int
+    components*: seq[ComponentInstance]
 
-  ComponentKind* {.pure.}= enum
-    Static, Dynamic
-  Component* = ref object
-    bytes*: int
-    name*: string
-    messages*: Table[string,Object]
+  ComponentInstance* = tuple[offs:int, co:Object]
 
-    case kind*: ComponentKind
-    of ComponentKind.Static:
-      nimType*: NimDataTypeID
-      destructor, initializer: ObjectDestructor
-      aggr*: AggregateType
-
-    of ComponentKind.Dynamic:
-      slots*: seq[string]
-
-
-  AggregateType* = ref object
-    bytes*: int
-    components*: seq[(int,Component)]
-
-  UncheckedArray* {.unchecked.}[T] = array[1,T]
+  UncheckedArray*{.unchecked.}[T] = array[1,T]
   Object* = ref object
-    ty*: AggregateType
+    ty*: Aggr
     dat*: UncheckedArray[byte]
 
-  ObjectDestructor* = proc(self:Object, componentData: pointer){.nimcall.}
 
+# cos
+type
+  MTable* = object
+    entries*: Table[string,Object]
+  NimDataType* = object
+    nimType*: int
+    instanceSize*: int
+  Slots* = object
+    names*: seq[string]
 
-var data_type_counter{.global.} = 1
-var staticComponents{.global.}: seq[Component] = @[]
-
-proc nextStaticID* : int = data_type_counter
-
-iterator knownStaticComponents* : Component = 
-  for i in 1 .. high(staticComponents):
-    yield staticComponents[i]
-iterator staticComponentsFrom* (start:int): Component =
-  for i in start .. high(staticComponents):
-    yield staticComponents[i]
-
-proc castTo (fro,to:NimNode): NimNode {.compileTime.}=
-  newTree(nnkCast, to, fro)
-
-proc genDecrefStmts (ty:NimNode, data:NimNode): NimNode {.compileTime.} =
-  result = newStmtList()
-  let stmts = newStmtList()
-  var skipCast = false
-
-  case ty.typekind
-  of ntyInt:
-    skipCast = true
-
-
-  of ntyString:
-    let data = data.castTo(newTree(nnkPtrTy, ty))
-    result = quote do: 
-        `data`[] = nil
-        # let `strdata` = 
-        # if not `data`[].isNil: GCunref(`data`[])
-
-  of ntyObject:
-    echo treerepr data
-    let data = data.castTo(newTree(nnkPtrTy, ty))
-    echo treerepr ty
-    let obj_ty = ty.getType
-    echo treerepr obj_ty
-    for field in obj_ty[1].children:
-      let field_ty = getType(field)
-      let ftyk = field_ty.typekind
-      if ftyk in {ntyString, ntyRef, ntySequence}:
-        echo field
-        result.add(quote do:
-          `data`.`field` = nil)
-      else:
-        echo ftyk
-
-
-  of ntyRef, ntySequence:
-    let data = data.castTo(newTree(nnkPtrTy, ty[0]))
-    let dsym = genSym(nskLet, "data")
-    return quote do:
-      let `dsym` = `data`
-      if not `dsym`[].isNil: `data`[] = nil#GCunref(`dsym`[])
-
-  of ntyProc:
-    # stmts.add(quote do: `data`[] = nil)
-    # ty_sym = ty[0]
-    let data = data.castTo(newTree(nnkPtrTy, ty[0]))
-    return quote do:
-      `data`[] = nil
-
-  of ntyDistinct:
-    # TODO fix later, remove the need for an extra function call
-    echo treerepr ty
-    let ty = if ty.kind == nnkSym: getType(ty) else: ty
-    let subt = ty[1]
-    return genDecrefStmts(subt, data)
-
-  of ntyCstring, ntyPtr:
-    discard 
-
-  else:
-    echo "what do for ", ty.typekind, "???"
-    echo treerepr ty
-    echo treerepr(getType(ty))
-    quit 0
+  Identifier* = distinct string
 
 
 
-proc destroyComponent* [t: any] (self:Object; data:pointer) {.nimcall.} =
-  # todo gcunref all non-nil refs (provide a default destructor)
-  macro decRefs : stmt =
-    let x: NimNode = (quote do: t)[0]
-    echo x.treerepr
-    var ty = getType(x)
-    var tyk = ty.typekind
-    if tyk == ntyTypedesc:
-      ty = ty[1]
-      tyk = ty.typekind
 
-    var ty_sym = ty
-
-    var stmts = genDecrefStmts(ty_sym, ident"data")
-    result = stmts
-
-    # if skipCast:
-    #   result = stmts
-    # else:
-    #   let pt = newTree(nnkPtrTy, ty_sym)
-    #   echo repr pt
-    #   result = newStmtList(quote do: 
-    #     let `data` = cast[`pt`](`data`))
-    #   result.add stmts
-
-    when defined(debug):
-      echo "destroyComponent macro result: " , repr result
-
-  when defined(debug):
-    echo "destroyComponent invoked ", name(t)
-  static:
-    echo name( t)
-  decRefs()
-
-proc next_type_id (t:typedesc): NimDataTypeID =
-  #mixin destroyComponent
-  result = data_type_counter.NimDataTypeID
-  var c = Component(
-    name: name(t), 
-    bytes: sizeof(t),
-    messages: initTable[string,Object](4),
-    kind: ComponentKind.Static,
-    nimType: result,
-    destructor: ObjectDestructor(destroyComponent[t])
+proc `$`* (some:Object): string =
+  "0x$#".format(toHex(cast[int](some), sizeof(int)*2))
+proc `$`* (some:Aggr): string =
+  "(Aggr $# $#)".format(
+    some.instanceSize,
+    $some.components
   )
-  if staticComponents.len < c.nimType+1:
-    staticComponents.setLen c.nimType+1
-  staticComponents[c.nimType] = c
 
-  data_type_counter += 1
 
-proc data_type_id* (t:typedesc): NimDataTypeID =
-  ## accessor used to check if a component is a data type
-  # static: echo name(t)
-  # echo name(t)
-  var id{.global.} = next_type_id(t)
+
+var id {.global.} = 0
+proc nextID(): int =
+  result = id
+  id += 1
+
+proc typeID* (ty:typedesc): int =
+  var id{.global.} = nextID()
   return id
 
-#proc gt*(n: typedesc): NimNode {.magic: "NGetType", noSideEffect.}
-#template getType* (t:typedesc): NimNode = getType(t)
+proc nimDatTy (ty:typedesc): NimDataType {.inline.} =
+  NimDataType(instanceSize: sizeof(ty), nimType: typeID(ty))
 
 
-proc dataComponent* (i:int): Component =
-  staticComponents[i]
+template static_component_size: int =
+  sizeof(MTable) + sizeof(NimDataType) + sizeof(Identifier)
 
-proc typeComponent* (t:typedesc): Component =
-  dataComponent(dataTypeID(t))
+proc allocObj (bytes:int): Object =
+  unsafeNew result, bytes+sizeof(Aggr)
 
-
-
-proc `$` (co: Component): string =
-  "(Component $#:$#)".format(
-    if co.nimType == 0.NimDataTypeID: "0x"& $toHex(cast[int](co), sizeof(int)*2) else: $co.nimType,
-    co.name
-  )
-
-
-
-## aggregate
-
-proc aggregate* (cos: varargs[Component]): AggregateType =
-  # create a new type out of multiple components
-
-  result = AggregateType(components: newSeq[(int,Component)](cos.len))
-  var bytes = 0
-  for i in 0 .. high(cos):
-    let c = cos[i] #cos[high(cos)-i]
-    result.components[i] = (bytes,c)
-    bytes += c.bytes
-  result.bytes = bytes
-
-proc rfind* (a: seq, b: any): int {.inline.}=
-  result = -1
-  for i in countdown(high(a), low(a)):
-    if a[i] == b: return i
-
-proc findComponentIndex* (ty: AggregateType; co: Component): int =
-  proc `==` (a: (int,Component), b: Component): bool =
-    a[1] == b
-  ty.components.find(co)
-proc findComponentIndex* (ty: AggregateType; componentName: string): int =
-  proc `==` (a: (int,Component), b: string): bool =
-    a[1].name == b
-  ty.components.find(componentName)
-
-proc findComponentOffset* (ty: AggregateType; co: Component): int =
-  result = ty.findComponentIndex co
-  if result == -1: return
-  result = ty.components[result][0]
-
-proc numComponents* (ty:AggregateType): int {.inline.} = ty.components.len
-
-
-## Object
-
-
+template data (o:Object; offs:int): ptr byte =
+  o.dat[offs].addr
 
 var 
-  aggx_undef*: AggregateType # global aggregate type used for nil
-    # todo add some safety that no components on here have data. 'twould be bad
+  cxMtable* : Object
 
-template safeType* (obj: Object): AggregateType =
-  (if obj.isNil: aggx_undef else: obj.ty)
+  cxNimdata* : Object
+  cxIdentifier* : Object
+  aggxStaticComponent* : Aggr
 
-iterator eachComponent* (ty:AggregateType): Component =
-  for i in 0 .. ty.components.high:
-    yield ty.components[i][1]
+  cxSlots* : Object
+  aggxSlots* : Aggr
+proc init ()
+cmodel.init()
 
-iterator eachComponentWithOffset* (ty:AggregateType, start:int): tuple[offs:int,comp:Component] =
-  for i in start .. ty.components.high:
-    yield ty.components[i]
+proc typeComponent* (some:typedesc[MTable]): Object =
+  cxMtable
+proc typeComponent* (some:typedesc[NimDataType]): Object =
+  cxNimdata
+proc typeComponent* (some:typedesc[Identifier]): Object =
+  cxIdentifier
+proc typeComponent* (some:typedesc): Object 
 
-proc printComponentNames* (ty: AggregateType; sep = ", "): string =
-  result = ""
-  let H = ty.components.high
-  for i in 0 .. H:
-    result.add ty.components[i][1].name
-    if i < H:
-      result.add sep
+proc safeType* (o:Object): Aggr {.inline.}
 
-proc simpleRepr* (obj: Object): string =
-  result = "("
-  result.add obj.safeType.printComponentNames()
-  result.add ')'
+proc `==` (ci:ComponentInstance; co:Object): bool = 
+  ci.co == co
+proc findComponentIndex* (obj,co: Object): int {.inline.}=
+  obj.safeType.components.find(co)
 
-when defined(Debug):
-  var objBeingFreed* = proc(o:Object) = 
-    echo "Object free'd: 0x",strutils.tohex(cast[int](o), sizeof(pointer)*2)
-    echo "  (", printComponentNames(o.ty), ")"
-proc freeObject* (obj: Object) =
-  #obj.sendMessage("beingFreed")
-  when defined(Debug):
-    if not objBeingFreed.isNil:
-      objBeingFreed(obj)
-  for ofs,component in obj.ty.components.items:
-    case component.kind
-    of ComponentKind.Static:
-      if not component.destructor.isNil:
-        let component_data = obj.dat[ofs].addr
-        component.destructor obj, component_data
+proc dataPtr* (some:Object; ty:typedesc): ptr ty {.inline.}=
+  let idx = some.findComponentIndex(typeComponent(ty))
+  assert idx != -1
+  let offs = some.ty.components[idx].offs
+  assert offs != -1
+  result = cast[ptr ty](some.dat[offs].addr)
+proc dataVar* (some:Object; ty:typedesc): var ty {.inline.}=
+  some.dataPtr(ty)[]
 
-    of ComponentKind.Dynamic:
-      let my_data = cast[ptr UncheckedArray[Object]](obj.dat[ofs].addr)
-      for idx in 0 .. high(component.slots):
-        template slot: Object = my_data[idx]
-        if not slot.isNil:
-          #echo "slot ", component.slots[idx], " ref count: ", slot.getRefCount
-          #GCunref slot
-          slot = nil
-
-  obj.ty = nil
-
-when true or defined(nim_fix_unsaferef_free):
-  proc x = 
-    var e: Object
-    new e, freeObject
-    e.ty = AggregateType(components: @[])
-  block: x()
-  GC_fullcollect()
+proc `[]`* (some:Object; ty:typedesc): var ty {.inline.}=
+  some.dataPtr(ty)[]
+proc `[]=`* (some:Object; ty:typedesc; val:ty) {.inline.}=
+  (some[ty]) = val
 
 
+# block:
+#   cxMtable[MTable] = initTable[string,Object]()
+#   cxMtable[NimDataType] = nimDatTy(MTable)
+#   cxMtable[Identifier] = Identifier("MTable")
 
-proc instantiate* (ty: AggregateType): Object =
-  unsafeNew result, ty.bytes + sizeof(AggregateType)
-  result.ty = ty
-  # todo run initializers
-
-
-proc dataPtr* (obj:Object; ty:typedesc): ptr ty =
-  let idx = obj.safeType.findComponentOffset(typeComponent(ty))
-  if idx == -1: return
-  return cast[ptr ty](obj.dat[idx].addr)
-proc dataVar* (obj:Object; ty:typedesc): var ty =
-  obj.findData(ty)[]
-
-proc findData* (obj:Object; ty:typedesc): ptr ty =
-  dataPtr(obj,ty)
-proc findDataM* (obj:Object; ty:typedesc): var ty =
-  dataVar(obj,ty)
-
-
-
-template printComponents* (e:Object): stmt =
-  let ty = e.safeType
-  for offs,c in items(ty.components):
-    echo "  ", c.name
-    for k in keys(c.messages):
-      stdout.write k
-      stdout.write ", "
-    stdout.write '\L'
-    stdout.flushfile
-  echo ty.components.len , " total"
-
-
-# proc send* (co:Component; msg:string; args:varargs[Object]): Object =
-#   let m = co.messages[msg]
-#   if not m.isNil:
-#     var bm: BoundComponent
-#     bm.comp = co
-#     bm.offs = -1
-#     result = m(bm, args)
-
-
-
-
-## dynamic components
-
-# proc readSlot (idx:int): MessageImpl =
-#   return proc(this:BoundComponent; args:varargs[Object]):Object =
-#     let offs = this.offs + (idx * sizeof(pointer))
-#     return cast[ptr Object](this.self.dat[offs].addr)[]
-# proc writeSlot (idx:int): MessageImpl =
-#   return proc(this:BoundComponent; args:varargs[Object]):Object =
-#     let offs = this.offs + (idx * sizeof(pointer))
-#     cast[var Object](this.self.dat[offs].addr) = args[0]
-
-# proc dynaComponent* (name: string; slots: varargs[string]): Component =
-#   result = Component(
-#     bytes: slots.len * sizeof(pointer),
-#     name: name,
-#     messages: initTable[string,MessageImpl](),
-#     kind: ComponentKind.Dynamic,
-#     slots: @slots
-#   )
-#   for i in 0 .. high(slots):
-#     let 
-#       m_reader = slots[i]
-#       m_writer = m_reader&":"
-#     result.rawDefine m_reader, readSlot(i)
-#     result.rawDefine m_writer, writeSlot(i)
+#   cxNimdata[MTable] = initTable[string,Object]()
+#   cxNimdata[NimDataType] = nimDatTy(NimDataType)
+#   cxNimdata[Identifier] = Identifier("NimData")
 
 
 
 
 
+proc instantiate* (some:Aggr): Object = 
+  unsafeNew result, sizeof(Aggr)+some.instanceSize
+  result.ty = some
+
+var static_components: seq[Object]
+proc typeComponent* (index:int): Object =
+  do_assert index in 0 .. high(static_components), "Invalid static component "& $index
+  return static_components[index]
+
+proc ensureLen* [T] (some: var seq[T]; L: int) {.inline.}=
+  if some.len < L: some.setLen L
+
+proc new_component (some:typedesc): Object =
+    let id = typeID(some)
+    static_components.ensureLen id+1
+    result = static_components[id]
+    if result.isNil:
+
+      result = aggxStaticComponent.instantiate
+      static_components[id] = result
+
+      result[NimDataType] = nimDatTy(some)
+      result[MTable].entries = initTable[string,Object]()
+      result[Identifier] = name(some).Identifier
+
+proc typeComponent* (some:typedesc): Object =
+  #static: echo name(some)
+  result = new_component(some)
+  #echo nimDatTy(some)
+
+proc hasComponent* (obj,co:Object): bool {.inline.}=
+  obj.findComponentIndex(co) > -1
+
+proc isStaticComponent* (co:Object): bool {.inline.} =
+  co.ty == aggxStaticComponent or co.hasComponent(cxNimdata)
 
 
+proc numComponents* (ty:Aggr): int = ty.components.len
+proc messages* (component:Object): var MTable = component[MTable]
 
-## aggregate behavior modifying
+var aggxUndef*: Aggr
+proc safeType* (o:Object): Aggr =
+  return if o.isNil: aggxUndef else: o.ty
 
 
-proc dup* (ty:AggregateType): AggregateType =
-  AggregateType(bytes: ty.bytes, components: ty.components)
+import future
+proc printComponentNames* (ty:Aggr; sep=","): string =
+  ty.components
+  .map( (ci:ComponentInstance) -> string => ci.co[Identifier].string )
+  .join(sep)
 
-proc isBehavior* (co:Component): bool = co.bytes == 0
-  ## component stores no state
 
-proc addBehavior* (ty:AggregateType; behav:Component): bool =
-  ## modify an aggregate type by adding behavior, all instances of 
-  ## the type will be affected! behavior is added to the front of 
-  ## object's behavior
-  result = behav.isBehavior
-  if not result: return false
+proc dataSize* (component:Object): int {.inline.}=
+  if component.isStaticComponent: 
+    component[NimDataType].instanceSize 
+  elif component.hasComponent(typeComponent(Slots)):
+    component[Slots].names.len * sizeof(Object)
+  else:
+    # TODO slots
+    0
 
-  ty.components.insert((-1,behav), 0)
+proc aggregate* (components: varargs[Object]): Aggr =
+  result = Aggr(components: @[])
+  for t in components:
+    var offs = -1
+    let sz = t.dataSize
+    if sz > 0:
+      result.components.add((result.instanceSize, t))
+      result.instanceSize += sz
+    else:
+      result.components.add((-1, t))
 
-proc addBehavior* (obj:Object; behav:Component): bool =
-  ## derive a new aggregate type for obj with behav added. 
-  ## no other instances of the current type will be affected.
-  result = behav.isBehavior
-  if not result: return false
+proc init = 
 
-  let new_ty = obj.ty.dup
-  #new_ty.components.add((-1,behav))
-  new_ty.components.insert((-1,behav), 0)
-  obj.ty = new_ty
+  #assert id == 0, "id = "& $id
 
-proc dropBehavior* (ty:AggregateType; behav:Component): bool =  
-  ## modifies an aggregate type, all instances will be affected!
-  result = behav.isBehavior
-  if not result: return false
+  cxMTable = allocObj(static_component_size)
+  cxNimdata = allocObj(static_component_size)
+  cxIdentifier = allocObj(static_component_size)
+  aggxStaticComponent = Aggr(
+    instanceSize: static_component_size,
+    components: @[
+      (0, cxMtable),
+      (sizeof(MTable), cxNimdata),
+      (sizeof(MTable)+sizeof(NimDataType), cxIdentifier)
+    ]
+  )
 
-  let idx = ty.findComponentIndex(behav)
-  if idx == -1: return false
+  assert static_components.isNil
+  static_components.newSeq 4
 
-  ty.components.delete idx
+  #assert id == 0
 
-proc dropBehavior* (obj:Object; behav:Component): bool =
-  ## derive a new type for the object without `behav`. this does not
-  ## modify other objects, instead the object is assigned a new copy of type.
-  result = behav.isBehavior
-  if not result: return false
+  assert typeID(MTable) == 1, $typeID(MTable)
+  cxMtable.ty = aggxStaticComponent
+  assert typeID(NimDataType) == 2
+  cxNimdata.ty = aggxStaticComponent
+  assert typeID(Identifier) == 3
+  cxIdentifier.ty = aggxStaticComponent
+  template initStaticComponent (o:Object; t:typedesc; name:string): stmt =
+    {.line: instantiationInfo() .}:
+      o[MTable].entries = initTable[string,Object]()
+      o[NimDataType] = nimDatTy(t)
+      o[Identifier] = Identifier(name)
+      #echo typeID(t)
+      static_components[typeID(t)] = o
+  initStaticComponent cxMTable, MTable, "MTable"
+  initStaticComponent cxNimdata, NimDataType, "NimData"
+  initStaticComponent cxIdentifier, Identifier, "Identifier"
 
-  let idx = obj.ty.findComponentIndex(behav)
-  if idx == -1: return false
+  #assert id == 4, "id = "& $id
 
-  let new_ty = obj.ty.dup
-  new_ty.components.delete idx
-  obj.ty = new_ty
+  # static_components.safeAdd([cxMtable, cxNimdata, cxIdentifier])
 
-proc insertBehavior* (ty:AggregateType; behavior:Component; index:Natural): bool=
-  ## insert a behavior into a specific slot
-  ## index should range from 0 .. high(ty.components)
-  ## index 0 inserts at the begining of the component list, dispatch looks down this list
+  cxSlots = typeComponent(Slots)
+  aggxSlots = Aggr(
+    instanceSize: sizeof(Slots)+sizeof(MTable)+sizeof(Identifier),
+    components: @[
+      (0, cxMTable),
+      (sizeof(MTable), cxSlots),
+      (sizeof(MTable)+sizeof(Slots), cxIdentifier)
+    ]
+  )
+
+iterator staticComponentsFrom* (start:int): Object =
+  for i in start .. high(static_components):
+    yield static_components[i]
+proc nextStaticID* : int = id
+
+proc isBehavior* (co:Object): bool =
+  co.dataSize == 0
+proc addBehavior* (co,behavior:Object): bool =
   result = behavior.isBehavior
   if not result: return
-  do_assert index in 0 .. ty.components.high
-  ty.components.insert(
-    (-1,behavior),
-    index)
+  co.ty.components.insert((-1,behavior),0)
+
+proc insertBehavior* (ty:Aggr; beh:Object; idx:int): bool =
+  result = beh.isBehavior
+  if not result: return
+  ty.components.insert((-1,beh), idx)
+
+template `[]`* (some:MTable; key:string): Object = 
+  some.entries[key]
+template `[]=`* (some:MTable; key:string; val:Object) = 
+  some.entries[key] = val
 
 
-
-proc mutate* (some:AggregateType; before,after,drop:openarray[Component] = []): AggregateType =
-  # ty = aggregate(ty1, ty2)
-  # ty = ty.mutate(
-  #       before = [ty3], 
-  #       after = [ty4], 
-  #       drop = [ty2])
-  #  # => aggregate(ty3, ty1, ty4)
-  var comps = newSeq[Component]()
-  for c in before:
-    comps.add c
-
-  for c in some.eachComponent:
-    if c notIn drop:
-      comps.add c
-
-  for c in after: 
-    comps.add c
-
-  result = aggregate comps
-
+proc printComponents* (some:Object) =
+  let ty = some.safeType
+  for offs,c in ty.components.items:
+    stdout.write ' ', c[Identifier].string, ": "
+    for k in c[MTable].entries.keys:
+      stdout.write k, ", "
+    stdout.write "\n"
+    stdout.flushFile
 

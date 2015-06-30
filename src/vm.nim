@@ -1,25 +1,57 @@
 import 
-  cmodel, macros
+  cmodel, macros, strutils
 
 
-proc slotsComponent* (name: string; slots: varargs[string]): Component 
+template echoCode* (xpr:expr): stmt =
+  echo astToStr(xpr),": ",xpr
+template echoCodeI* (i=2; xpr:expr): stmt =
+  echo repeat(' ',i), astToStr(xpr), ": ", xpr
+
+
+proc slotsComponent* (name: string; slots: varargs[string]): Object 
   ## depends on opcodes
 
+proc init: void
+init()
+
 var 
-  cxObj* = slotsComponent("Object")
-  obj_lobby* : Object ## defined later, this is where globals live
-  cxMethodContext* = slotsComponent("MethodContext")
 
-  cxTrue* = slotsComponent("True")
-  obj_true* = aggregate(cxTrue, cxObj).instantiate
+  cxObj*, cxTrue*, cxFalse*: Object
+  objLobby*, objTrue*, objFalse*: Object ## defined later, this is where globals live
 
-  cxFalse* = slotsComponent("False")
-  obj_false* = aggregate(cxFalse, cxObj).instantiate
+  cxUndef*: Object
 
-  cxUndef* = slotsComponent("Undef")
+  cxContext*, cxMethodContext*, cxBlockContext*: Object
 
-cmodel.aggxUndef = aggregate(cxUndef, cxObj)
-assert obj_true.safeType.findComponentIndex(cxFalse) == -1
+  cxExec*: Object
+  aggxExec*: Aggr
+
+  cxRawBytes*: Object
+  aggxRawBytes*: Aggr
+
+  cxDNU*: Object
+  aggxDNU*: Aggr
+
+  cxArray*: Object
+  aggxArray*: Aggr
+
+  cxStrTab*: Object
+  aggxStrTab*: Aggr
+
+
+var std_aggrs : seq[Aggr] = @[]
+proc stdAggr* (co: Object): var Aggr =
+  let nt = co.dataPtr(NimDataType)
+  do_assert(not nt.isNil)
+  std_aggrs.ensureLen nt.nimType+1
+  if std_aggrs[nt.nimType].isNil:
+    echo "making new aggr ", co[Identifier].string
+    std_aggrs[nt.nimType] = aggregate(co, cxObj)
+  return std_aggrs[nt.nimType]
+proc stdAggr* (nimType:int): var Aggr =
+  do_assert nimType in 0 .. cmodel.nextStaticID()
+  std_aggrs.ensureLen nimType+1
+  return std_aggrs[nimType]
 
 
 type
@@ -31,8 +63,10 @@ template defPrimitiveComponent* (n:untyped, comp:typed): stmt =
 
     let `cx n`* {.inject} = typeComponent(comp)
     let `aggx n`* {.inject} = aggregate(typeComponent(comp), cx_obj)
-    `cx n`.aggr = `aggx n`
-    `cx n`.name = astToStr(n)
+    #`cx n`.aggr = `aggx n`
+    stdAggr(`cx n`) = `aggx n`
+    #`cx n`.name = astToStr(n)
+    `cx n`[Identifier] = astToStr(n).Identifier
     proc `obj n`* (some: `comp`): Object  =
       result = `aggx n`.instantiate
       result.dataVar(comp) = some
@@ -64,7 +98,7 @@ template defPrimitiveComponent* (n:untyped, comp:typed): stmt =
 type
   BoundComponent* = object
     self*: Object
-    comp*: Component
+    comp*: Object#Component
     idx*: int
 
 ## BoundComponent
@@ -73,7 +107,7 @@ type
 ##   BoundComponent is valid so long as you do not prepend the object type
 proc dataPtr* (c:BoundComponent; t:typedesc): ptr t =
   # take unsafe reference to component data. 
-  do_assert c.comp.nimType == data_type_id(t)
+  do_assert c.comp[NimDataType].nimType == typeID(t) #.nimType == data_type_id(t)
   let offs = c.self.ty.components[c.idx][0]
   cast[ptr t](c.self.dat[offs].addr)
 proc dataVar* (c:BoundComponent; t:typedesc): var t =
@@ -85,11 +119,11 @@ proc asVar* (c:BoundComponent; t:typedesc): var t {.deprecated.} =
   c.dataVar(t)
 
 
-proc getComponent* (some: Object; comp: Component): BoundComponent {.inline.} =
+proc getComponent* (some, comp: Object): BoundComponent {.inline.} =
   BoundComponent(
     self: some, 
     comp: comp, 
-    idx: some.safeType.findComponentIndex(comp)
+    idx: some.findComponentIndex(comp)
   )
 proc getComponent* (some: Object; n: int): BoundComponent {.inline.} =
   do_assert n in 0 .. some.safeType.components.high
@@ -105,23 +139,35 @@ proc slotPtr* (bc: BoundComponent; idx: int): ptr Object =
 proc slotVar* (bc: BoundComponent; idx: int): var Object =
   bc.slotPtr(idx)[]
 
+proc findComponentIndex* (some:Object; name:string): int {.inline.}=
+  let ty = some.safeType
+  proc `==` (a:ComponentInstance; name:string): bool =
+    a.co.hasComponent(cxIdentifier) and a.co[Identifier].string == name
+  result = ty.components.find(name)
+
 
 proc findComponent* (some: Object; name: string): BoundComponent {.inline.}=
-  let ty = some.safeType
-  let idx = ty.findComponentIndex(name)
+  let idx = some.findComponentIndex(name)
   result.self = some
   result.idx = idx
   if idx == -1:
     return
-  result.comp = ty.components[idx][1]
+  result.comp = some.safeType.components[idx][1]
+
+proc isBehavior* (co:Object): bool {.inline.}=
+  co.dataSize == 0
+
+
 
 proc slotNames* (some: BoundComponent): seq[string] =
   if not some.isValid or 
-      some.comp.isNil or
-      some.comp.isBehavior or
-      some.comp.kind == ComponentKind.Static: 
+      some.comp.isNil:
     return @[]
-  return some.comp.slots
+  let slots = some.comp.dataPtr(Slots)
+  if slots.isNil:
+    return @[]
+
+  return slots.names
 
 
 
@@ -134,7 +180,7 @@ type
 
 import tables
 
-proc findMessage* (ty: AggregateType; msg: string; res: var MessageSearch): bool =
+proc findMessage* (ty: Aggr; msg: string; res: var MessageSearch): bool =
   
   #for i in countdown(res.continueFrom, 0, 1):
   for i in res.continueFrom .. <ty.numComponents:
@@ -166,8 +212,8 @@ proc findMessage* (obj:Object; msg:string): (BoundComponent,Object) =
 
 
 
-let 
-  cxBoundComponent = typeComponent(BoundComponent)
+var 
+  cxBoundComponent*: Object
 
 type
   Block* = object
@@ -175,17 +221,17 @@ type
     nArgs*, nLocals*: int
     argNamesAt*, argNamesBytes*: int
     meth*, lexicalParent*: Object
-let cxBlock* = typeComponent(Block)
+var cxBlock*: Object
 
 type
   CompiledMethod* = object
     name*: string
     bytecode*: seq[byte]
     args,locals: seq[string]
-    contextCreator*: Component ## component with slots for args and locals to hold state in the context object
-let 
-  cxCompiledMethod* = typeComponent(CompiledMethod)
-  aggxCompiledMethod* = aggregate(cxCompiledMethod, cxObj)
+    contextCreator*: Object ## component with slots for args and locals to hold state in the context object
+var 
+  cxCompiledMethod*: Object
+  aggxCompiledMethod*: Aggr
 
 
 proc initCompiledMethod* (name:string; bytecode:seq[byte]; args,locals:openarray[string]=[]): CompiledMethod =
@@ -206,22 +252,17 @@ type
     fn*: PrimitiveCB
     code*,name*: string
 
-let 
-  cxPrimitiveMessage* = typeComponent(PrimitiveMessage)
-  aggxPrimitiveMessage* = aggregate(
-    cxPrimitiveMessage, cxCompiledMethod, cxObj)
-cxPrimitiveMessage.aggr = aggxPrimitiveMessage
-
-
-
-
+var 
+  cxPrimitiveMessage*: Object
+  aggxPrimitiveMessage*: Aggr
+#cxPrimitiveMessage.aggr = aggxPrimitiveMessage
 
 
 
 proc newPrimitiveMessage* (args:openarray[string]; name,src:string; fn:PrimitiveCB): Object 
 
 
-proc rawDefine* (co:Component; msg:string; obj:Object) =
+proc rawDefine* (co:Object; msg:string; obj:Object) =
   co.messages[msg] = obj
 
 macro defineMessage* (co,msg,body:untyped):stmt =
@@ -242,7 +283,7 @@ macro defineMessage* (co,msg,body:untyped):stmt =
   var arg_names = newseq[NimNode]()
   new_body.add quote do:
     template self(): Object = this.self 
-    template thisComponent(): Component = this.comp
+    template thisComponent(): Object = this.comp
   var arg_idx = 0
   for fp1 in 1 .. len(body.params)-1:
     let p = body.params[fp1]
@@ -355,9 +396,10 @@ proc pushPOD* (i: var InstrBuilder; obj: Serializable) =
   mixin serialize
 
   let ty = typeComponent(type(obj))
-  let id = ty.nim_type
+  let id = ty[NimDataType].nimType
+  assert id == typeID(type(obj))
   do_assert id < 127, "FIX ASAP" # make this two bytes if it gets big
-  do_assert id > 0, "invalid id "& $id & "::"& ty.name
+  do_assert id > 0, "invalid id "& $id & "::"& ty[Identifier].string
   
   i.addByte Instr.PushPOD
   i.addByte id
@@ -466,6 +508,11 @@ proc done* (i: var InstrBuilder): seq[byte] =
 
 
 proc newPrimitiveMessage* (args:openarray[string]; name,src:string; fn:PrimitiveCB): Object =
+  # echoCode aggxPrimitiveMessage.printComponentNames()
+  # echoCode name
+  # echoCode src
+  # echoCode aggxPrimitiveMessage.isNil
+  # echoCode aggxPrimitiveMessage.components
   result = aggxPrimitiveMessage.instantiate
   result.dataPtr(PrimitiveMessage).fn = fn
   result.dataPtr(PrimitiveMessage).code = src
@@ -529,21 +576,31 @@ proc writeSlot (idx:int): Object =
       "slotWriter#"& $idx,
       ib.done,  args=["val"]  )
 
-
-proc slotsComponent (name: string; slots: varargs[string]): Component =
-  result = Component(
-    bytes: slots.len * sizeof(pointer),
-    name: name,
-    messages: initTable[string,Object](),
-    kind: ComponentKind.Dynamic,
-    slots: @slots
-  )
+proc slotsComponent (name: string; slots: varargs[string]): Object =
+  result = aggxSlots.instantiate
+  result[Slots].names = @slots
+  result[MTable].entries = initTable[string,Object]()
+  result[Identifier] = name.Identifier
   for i in 0 .. high(slots):
-    let 
+    let
       m_reader = slots[i]
       m_writer = m_reader&":"
     result.rawDefine m_reader, readSlot(i)
     result.rawDefine m_writer, writeSlot(i)
+
+  # result = Component(
+  #   bytes: slots.len * sizeof(pointer),
+  #   name: name,
+  #   messages: initTable[string,Object](),
+  #   kind: ComponentKind.Dynamic,
+  #   slots: @slots
+  # )
+  # for i in 0 .. high(slots):
+  #   let 
+  #     m_reader = slots[i]
+  #     m_writer = m_reader&":"
+  #   result.rawDefine m_reader, readSlot(i)
+  #   result.rawDefine m_writer, writeSlot(i)
 
 
 
@@ -551,8 +608,9 @@ proc slotsComponent (name: string; slots: varargs[string]): Component =
 
 
 type Stack* = distinct seq[Object]
-let cxStack* = typeComponent(Stack)
-let aggxStack = aggregate(cxStack, cxObj)
+var 
+  cxStack*: Object
+  aggxStack*: Aggr
 
 proc len* (some: ptr Stack): int =
   result = 
@@ -584,9 +642,6 @@ type
   BlockContext* = object
     lexicalParent*, owningBlock*: Object
 
-let 
-  cxContext* = typeComponent(Context)
-  cxBlockContext* = typeComponent(BlockContext)
 
 proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
   ## allocates a context for a method
@@ -600,7 +655,6 @@ proc createContext* (compiledMethod:Object; bound:BoundComponent): Object =
     cxStack, cxContext,
     cxObj
   )
-  proc `$` (c:Component):string=c.name
   result.dataVar(Context).highIP = cm.bytecode.high
   result.dataVar(Context).instrs = compiledMethod
   #result.dataVar(Context).parent = obj_lobby
@@ -622,8 +676,6 @@ type Exec* = object
   bytePtr*: Object
   result*: Object
 
-let cxExec* = typeComponent(Exec)
-let aggxExec* = aggregate(cxExec, cxObj)
 
 proc isActive* (some: ptr Exec): bool =
   not some.activeContext.isNil
@@ -651,21 +703,13 @@ proc ptrToBytecode* (some: ptr Exec): ptr UncheckedArray[byte] =
 
 proc setActiveContext* (someExec, ctx: Object) =
   if someExec.isNil:
-    printComponents ctx
+    discard#printComponents ctx
 
   assert(not someExec.isNil)
   someExec.dataVar(Exec).activeContext = ctx
   if not ctx.isNIL:
     ctx.dataVar(Context).exec = someExec
 
-let cxRawBytes* = typeComponent(cstring)
-let aggxRawBytes* = aggregate(cxRawBytes, cxObj)
-
-import strutils
-template echoCode* (xpr:expr): stmt =
-  echo astToStr(xpr),": ",xpr
-template echoCodeI* (i=2; xpr:expr): stmt =
-  echo repeat(' ',i), astToStr(xpr), ": ", xpr
 
 template wdd * (body:stmt):stmt =
   when defined(Debug): body
@@ -678,10 +722,7 @@ const ShowInstruction =
 
 type Array* = object
   elems*: seq[Object]
-let
-  cxArray* = typeComponent(Array)
-  aggxArray* = aggregate(cxArray, cxObj)
-cxArray.aggr = aggxArray
+#cxArray.aggr = aggxArray
 
 proc len* (some:Array): int = some.elems.len
 
@@ -691,9 +732,7 @@ proc len* (some:Array): int = some.elems.len
 type 
   StrTab* = TableRef[string,Object]
 
-let cxStrTab* = typeComponent(StrTab)
-let aggxStrTab* = aggregate(cxStrTab, cxObj)
-cxStrTab.aggr = aggxStrTab
+#cxStrTab.aggr = aggxStrTab
 
 
 type DNU* = object
@@ -701,15 +740,13 @@ type DNU* = object
   args*: seq[Object]
   caller*: Object
 
-let 
-  cxDNU* = typeComponent(DNU)
-  aggxDNU* = aggregate(cxDNU, cxObj)
-cxDNU.aggr = aggxDNU
+#cxDNU.aggr = aggxDNU
 
 proc newDNU* (msg:string, args:seq[Object], caller:Object): Object =
   result = aggxDNU.instantiate
   result.dataVar(DNU) = DNU(msg: msg, args: args, caller: caller)
 
+proc simpleRepr* (o:Object): string = "($#)" % o.safeType.printComponentNames(",")
 
 proc createMethodCallContext* (caller, recv:Object; msgName:string; args:seq[Object]): Object =
   ## sets up a method call context to call `msgname` on `recv`
@@ -856,13 +893,13 @@ proc tick* (self: Object) =
     proc methodOwner (ctx: Object): Object =
       result = ctx
       while true:
-        echo ".", result.dataPtr(Context).instrs.dataPtr(CompiledMethod).name
-        echo " ", result.dataPtr(Context).ip, " ($#)" % result.safetype.printComponentNames(",")
-        echo "  ",result.safeType.findComponentIndex(cxMethodContext)
-        proc `$` (co:Component): string = co.name
-        echo result.safeType.components
-        if result.safeType.findComponentIndex(cxMethodContext) != -1:
-          echo " this is a MethodContext"
+        # echo ".", result.dataPtr(Context).instrs.dataPtr(CompiledMethod).name
+        # echo " ", result.dataPtr(Context).ip, " ($#)" % result.safetype.printComponentNames(",")
+        # echo "  ",result.findComponentIndex(cxMethodContext)
+        # proc `$` (co:Object): string = co[Identifier].string
+        # echo result.safeType.components
+        if result.findComponentIndex(cxMethodContext) != -1:
+          # echo " this is a MethodContext"
           return result
         result = result.dataPtr(BlockContext).lexicalParent
 
@@ -931,9 +968,9 @@ proc tick* (self: Object) =
     if not bm.isNil:
 
       # found bound method, trying to get slot "slot"
-      do_assert slot.int in 0 .. high(bm.comp.slots)
+      do_assert slot.int in 0 .. high(bm.comp[Slots].names)#.slots)
       let obj = bm[].slotVar(slot.int)
-      wdd: obj.printcomponents
+      #wdd: obj.printcomponents
       push obj
 
       # let offs = bm.self.ty.components[bm.idx][0]
@@ -954,7 +991,7 @@ proc tick* (self: Object) =
     let val = pop()
     let bc = activeContext.dataPtr(BoundComponent)
     if not bc.isNil:
-      do_assert slot.int in 0 .. high(bc.comp.slots)
+      do_assert slot.int in 0 .. high(bc.comp[Slots].names)#.slots)
       do_assert bc[].isValid
       bc[].slotVar(slot.int) = val
       # let offs = bm.self.ty.components[bm.idx][0]
@@ -968,7 +1005,7 @@ proc tick* (self: Object) =
 
     idx += 1
     let id = iset[idx].int
-    let ty = dataComponent(id)
+    let ty = typeComponent(id)
     idx += 1
     let cstr = cast[cstring](iset[idx].addr)
     #let src = objRawBytes(cstr)
@@ -978,11 +1015,11 @@ proc tick* (self: Object) =
     src.dataVar(RawBytes) = cstr
 
     when defined(Debug):
-      echoCodeI 2, ty.name
+      echoCodeI 2, ty[Identifier].string#name
 
-    let obj = ty.aggr.instantiate()
+    let obj = ty.stdAggr.instantiate()
     if obj.isNil:
-      vmException("NEW POD ", ty.name, " FAILED  TO LOAD")
+      vmException("NEW POD ", ty[Identifier].string, " FAILED  TO LOAD")
 
     let o2 = obj.send("loadFromRaw:", src)
     let L  = o2.dataPtr(int)
@@ -1053,7 +1090,7 @@ proc tick* (self: Object) =
       activeContext, recv, str, args )
     if ctx.isNil:
       # TODO replace with exception ? 
-      recv.printComponents
+      #recv.printComponents
       echo "doesNotUnderstand missing! fail execution. haha."
       echo "  msg was ", str
       echo "  recv was ", recv.send("print").dataPtr(string)[]
@@ -1136,83 +1173,51 @@ proc send* (recv:Object; msg:string; args:varargs[Object]): Object =
 
 
 
+proc init = 
+
+
+  cxCompiledMethod = typeComponent(CompiledMethod)
+  cxPrimitiveMessage = typeComponent(PrimitiveMessage)
+  cxStack   = typeComponent(Stack)
+  cxExec = typeComponent(Exec)
+  cxRawBytes = typeComponent(cstring)
+  cxStrTab = typeComponent(StrTab)
+  cxBlock = typeComponent(Block)
+  cxArray = typeComponent(Array)
+  cxDNU = typeComponent(DNU)
+  cxContext = typeComponent(Context)
+  cxBlockContext = typeComponent(BlockContext)
+
+  cxBoundComponent = typeComponent(BoundComponent)
+
+  cxObj = slotsComponent("Object")
+  cxUndef = slotsComponent("Undef")
+
+  cmodel.aggxUndef = aggregate(cxUndef, cxObj)
+  cxMethodContext = slotsComponent("MethodContext")
+ 
+  cxTrue  = slotsComponent("True")
+  objTrue = aggregate(cxTrue, cxObj).instantiate
+
+  cxFalse  = slotsComponent("False")
+  objFalse = aggregate(cxFalse, cxObj).instantiate
 
 
 
+  aggxCompiledMethod = aggregate(cxCompiledMethod, cxObj)
+
+  aggxPrimitiveMessage = aggregate(
+    cxPrimitiveMessage, cxCompiledMethod, cxObj)
+
+  aggxStack = aggregate(cxStack, cxObj)
+
+  aggxExec = aggregate(cxExec, cxObj)
+
+  aggxRawBytes = aggregate(cxRawBytes, cxObj)
+
+  aggxStrTab = aggregate(cxStrTab, cxObj)
 
 
+  aggxArray = aggregate(cxArray, cxObj)
 
-
-
-
-
-
-
-# not used in the vm
-defPrimitiveComponent(Int, int)
-defPrimitiveComponent(String, string)
-
-
-
-defineMessage(cxInt, "*") do (other):
-  let other_int = other.dataVar(int)
-  result = asObject(this.dataVar(int) * other_int)
-defineMessage(cxInt, "+") do (other):
-  let other_int = other.dataVar(int)
-  result = asObject(this.asVar(int) + other_int)
-defineMessage(cxInt, "-") do (other):
-  asObject(this.dataVar(int) - other.dataVar(int))
-defineMessage(cxInt, "<") do (other):
-  return
-    if this.dataVar(int) < other.dataVar(int):
-      obj_true
-    else:
-      obj_false
-defineMessage(cxInt, ">") do (other):
-  return if this.dataVar(int) > other.dataVar(int): obj_true else: obj_false
-defineMessage(cxInt, "<=") do (other):
-  return if this.dataVar(int) <= other.dataVar(int): obj_true else: obj_false
-defineMessage(cxInt, ">=") do (other):
-  return if this.dataVar(int) >= other.dataVar(int): obj_true else: obj_false
-
-
-defineMessage(cxInt, "print") do:
-  result = asObject($ this.asVar(int))
-
-defineMessage(cxString, "print") do: 
-  result = self
-
-defineMessage(cxObj, "asString") do:
-  result = self.send("print")
-
-
-
-
-# vm accessory types here 
-
-defineMessage(cxStack, "len") do -> Object:
-  this.dataPtr(Stack).len.asObject
-
-defineMessage(cxStack, "pop") do -> Object:
-  this.dataPtr(Stack).pop
-
-
-
-defineMessage(cxStrTab, "at:") 
-do (str):
-  wdd: echo "strtab access ", str.asString[]
-  if this.asVar(StrTab).isNil: return nil
-
-  let s = str.asString
-  if s.isNil: return nil
-
-  result = this.dataVar(StrTab)[s[]]
-
-defineMessage(cxStrTab, "at:put:") 
-do (str,val):
-  let s = str.asString
-  if s.isNil: return nil
-  if this.dataVar(StrTab).isNil:
-    this.dataVar(StrTab) = newTable[string,Object](4)
-  this.dataVar(StrTab)[s[]] = val
-
+  aggxDNU = aggregate(cxDNU, cxObj)
