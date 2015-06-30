@@ -520,8 +520,8 @@ defineMessage(cxObj, "printValue") do:
 let
   componentDict = obj_lobby.ty.instantiate
 
-proc getComponentComponent* (name:string): Object =
-  componentDict.dataVar(StrTab)[name]
+# proc getComponentComponent* (name:string): Object =
+#   componentDict.dataVar(StrTab)[name]
 
 proc registerComponent (co: Object) =
   if not co.isNil:
@@ -698,14 +698,14 @@ defineMessage(cxBlockContext, "retry") do:
   assert(not ctx.isNil)
   ctx.ip = bc.owningBlock.dataPtr(Block).ipStart
 
-proc defMetaComponent* (componentName:string): Object =
-  let o = getComponentComponent(componentName)
-  result = slotsComponent(componentName&"-ClassBehavior")
-  assert o.addBehavior(result)
+# proc defMetaComponent* (componentName:string): Object =
+#   let o = getComponentComponent(componentName)
+#   result = slotsComponent(componentName&"-ClassBehavior")
+#   assert o.addBehavior(result)
 
 
 block:
-  let CoClsBehav = defMetaComponent("Component")
+  let CoClsBehav = cxComponent # defMetaComponent("Component")
   defineMessage(CoClsBehav, "newBehavior:") do(name):
     slotsComponent(name.asString[])#.asObject
   defineMessage(CoClsBehav, "withSlots:") do(name, slotsArr):

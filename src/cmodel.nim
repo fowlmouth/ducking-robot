@@ -14,18 +14,32 @@ type
     dat*: UncheckedArray[byte]
 
 
-# cos
+# components
 type
   MTable* = object
     entries*: Table[string,Object]
+
   NimDataType* = object
     nimType*: int
     instanceSize*: int
-  Slots* = object
-    names*: seq[string]
 
   Identifier* = distinct string
 
+  Slots* = object
+    names*: seq[string]
+
+var 
+  cxMtable* : Object
+  cxNimdata* : Object
+  cxIdentifier* : Object
+
+  aggxStaticComponent* : Aggr
+
+  cxSlots* : Object
+  aggxSlots* : Aggr
+
+proc init ()
+cmodel.init()
 
 
 
@@ -52,33 +66,12 @@ proc nimDatTy (ty:typedesc): NimDataType {.inline.} =
   NimDataType(instanceSize: sizeof(ty), nimType: typeID(ty))
 
 
-template static_component_size: int =
-  sizeof(MTable) + sizeof(NimDataType) + sizeof(Identifier)
-
-proc allocObj (bytes:int): Object =
-  unsafeNew result, bytes+sizeof(Aggr)
-
-template data (o:Object; offs:int): ptr byte =
-  o.dat[offs].addr
-
-var 
-  cxMtable* : Object
-
-  cxNimdata* : Object
-  cxIdentifier* : Object
-  aggxStaticComponent* : Aggr
-
-  cxSlots* : Object
-  aggxSlots* : Aggr
-proc init ()
-cmodel.init()
-
-proc typeComponent* (some:typedesc[MTable]): Object =
-  cxMtable
-proc typeComponent* (some:typedesc[NimDataType]): Object =
-  cxNimdata
-proc typeComponent* (some:typedesc[Identifier]): Object =
-  cxIdentifier
+# proc typeComponent* (some:typedesc[MTable]): Object =
+#   cxMtable
+# proc typeComponent* (some:typedesc[NimDataType]): Object =
+#   cxNimdata
+# proc typeComponent* (some:typedesc[Identifier]): Object =
+#   cxIdentifier
 proc typeComponent* (some:typedesc): Object 
 
 proc safeType* (o:Object): Aggr {.inline.}
@@ -192,7 +185,13 @@ proc aggregate* (components: varargs[Object]): Aggr =
 
 proc init = 
 
-  #assert id == 0, "id = "& $id
+  template allocObj (bytes:int): Object =
+    var r: Object
+    unsafeNew r, bytes+sizeof(Aggr)
+    r
+
+  template static_component_size: int =
+    sizeof(MTable) + sizeof(NimDataType) + sizeof(Identifier)
 
   cxMTable = allocObj(static_component_size)
   cxNimdata = allocObj(static_component_size)
@@ -207,16 +206,19 @@ proc init =
   )
 
   assert static_components.isNil
-  static_components.newSeq 4
+  static_components = @[
+    cxMtable, cxNimdata, cxIdentifier
+  ]
 
   #assert id == 0
 
-  assert typeID(MTable) == 1, $typeID(MTable)
+  assert typeID(MTable) == 0, $typeID(MTable)
   cxMtable.ty = aggxStaticComponent
-  assert typeID(NimDataType) == 2
+  assert typeID(NimDataType) == 1
   cxNimdata.ty = aggxStaticComponent
-  assert typeID(Identifier) == 3
+  assert typeID(Identifier) == 2
   cxIdentifier.ty = aggxStaticComponent
+
   template initStaticComponent (o:Object; t:typedesc; name:string): stmt =
     {.line: instantiationInfo() .}:
       o[MTable].entries = initTable[string,Object]()
